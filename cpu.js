@@ -275,19 +275,6 @@ var CPU = (function () {
 		return ret;
 	}
 	
-	var CONDS = [
-		function (cpsr) { return  cpsr.getZ (); },
-		function (cpsr) { return !cpsr.getZ (); },
-		function (cpsr) { return  cpsr.getC (); },
-		function (cpsr) { return !cpsr.getC (); },
-		function (cpsr) { return  cpsr.getN (); },
-		function (cpsr) { return !cpsr.getN (); },
-		function (cpsr) { return  cpsr.getV (); },
-		function (cpsr) { return !cpsr.getV (); },
-		function (cpsr) { return  cpsr.getC () && !cpsr.getZ (); },
-		function (cpsr) { return !cpsr.getC (); },
-	];
-
 	function Register (value)
 	{
 		this.value = value || 0;
