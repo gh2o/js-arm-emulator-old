@@ -1,7 +1,7 @@
-if (typeof require === "function")
-	var Util = require ('./struct.js');
-
 var ELF = (function () {
+
+	if (typeof require === "function")
+		var Util = require ('./struct.js');
 
 	function Loader (dv)
 	{

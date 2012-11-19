@@ -1,5 +1,8 @@
 var CPU = (function () {
 
+	if (typeof require === "function")
+		var Mem = require ('./mem.js');
+
 	var
 		MODE_usr = 0x10,
 		MODE_fiq = 0x11,
@@ -404,6 +407,7 @@ var CPU = (function () {
 	var srp = new Register (0);
 	srp.getMode = function () { return this.value & 0x1f; };
 	srp.setMode = function (mode) { return (this.value & ~0x1f) | (mode & 0x1f); };
+	srp.isPrivileged = function () { return this.getMode () != MODE_usr; }
 	attachBits (srp, {
 		N: 31,
 		Z: 30,
@@ -443,8 +447,7 @@ var CPU = (function () {
 	
 	function ARM (pmem)
 	{
-		this.pmem = pmem;
-		this.vmem = pmem; // FIXME
+		this.creg = new ControlRegister (0);
 		
 		var r0 = new Register (0);
 		var r1 = new Register (0);
@@ -514,7 +517,7 @@ var CPU = (function () {
 		this.mstatregs[MODE_irq] = [cpsr, new StatusRegister (0)];
 		this.mstatregs[MODE_fiq] = [cpsr, new StatusRegister (0)];
 		
-		this.creg = new ControlRegister (0);
+		this.vmem = new Mem.VirtualMemory (pmem, this.cpsr, this.creg);
 	}
 	
 	ARM.prototype = {
@@ -551,6 +554,8 @@ var CPU = (function () {
 				(inst & 0x0fb0fff0) == 0x0120f000
 			)
 				this.inst_MSR (inst);
+			else if ((inst & 0x0fbf0fff) == 0x010f0000)
+				this.inst_MRS (inst);
 			else if ((inst & 0x0f100010) == 0x0e100010)
 				this.inst_MRC (inst);
 			else if ((inst & 0x0f100010) == 0x0e000010)
@@ -559,6 +564,8 @@ var CPU = (function () {
 				this.inst_B_BL (inst);
 			else if ((inst & 0x0de00000) == 0x01a00000)
 				this.inst_MOV (inst);
+			else if ((inst & 0x0de00000) == 0x01e00000)
+				this.inst_MVN (inst);
 			else if ((inst & 0x0de00000) == 0x00800000)
 				this.inst_ADD (inst);
 			else if ((inst & 0x0de00000) == 0x00400000)
@@ -581,6 +588,8 @@ var CPU = (function () {
 				this.inst_STR (inst);
 			else if ((inst & 0x0e500000) == 0x08100000)
 				this.inst_LDM1 (inst);
+			else if ((inst & 0x0e500000) == 0x08000000)
+				this.inst_STM1 (inst);
 			else
 			{
 				function hex32 (x)
@@ -652,11 +661,11 @@ var CPU = (function () {
 			if (c.Rd.value == 15)
 				throw "use of PC for coprocessor";
 			
-			if (c.CRm == 0 && c.opcode_2 == 0)
+			if (c.CRn == 0 && c.opcode_2 == 0)
 			{
 				c.Rd.value = 0x41009200;
 			}
-			else if (c.CRm == 1 && opcode_2 == 0)
+			else if (c.CRn == 1 && c.opcode_2 == 0)
 			{
 				c.Rd.value = this.creg.value;
 			}
@@ -676,6 +685,24 @@ var CPU = (function () {
 			
 			switch (c.CRn)
 			{
+				case 1:
+					if (c.opcode_2 == 0)
+						this.creg.value = c.Rd.value;
+					else
+						throw "bad opcode";
+					break;
+				case 2:
+					if (c.opcode_2 == 0)
+						this.vmem.regTable = c.Rd.value;
+					else
+						throw "bad opcode";
+					break;
+				case 3:
+					if (c.opcode_2 == 0)
+						this.vmem.regDomains = c.Rd.value;
+					else
+						throw "bad opcode";
+					break;
 				case 7: // cache management
 					break;
 				case 8: // memory management
@@ -699,6 +726,20 @@ var CPU = (function () {
 			commonShifter (inst, this.getRegs (), this.getStatRegs (), false,
 				function (a, b)
 					{ return b; },
+				function (a, b, r, a31, b31, r31)
+					{ return r31; },
+				function (a, b, r, a31, b31, r31)
+					{ return r == 0; },
+				function (a, b, r, a31, b31, r31, sco)
+					{ return sco; },
+				function (a, b, r, a31, b31, r31)
+					{ return undefined; }
+			);
+		},
+		inst_MVN: function (inst) {
+			commonShifter (inst, this.getRegs (), this.getStatRegs (), false,
+				function (a, b)
+					{ return ~b; },
 				function (a, b, r, a31, b31, r31)
 					{ return r31; },
 				function (a, b, r, a31, b31, r31)
@@ -857,7 +898,23 @@ var CPU = (function () {
 			
 			if (s.end_address != address - 4)
 				throw "assertion failed";
-		}
+		},
+		inst_STM1: function (inst) {
+			var s = preLoadStoreMultiple (inst, this.getRegs ());
+			
+			var address = s.start_address;
+			for (var i = 0; i <= 14; i++)
+			{
+				if (s.register_list & (1 << i))
+				{
+					this.vmem.putU32 (address, this.getReg (i).value);
+					address += 4;
+				}
+			}
+
+			if (s.end_address != address - 4)
+				throw "assertion failed";
+		},
 	};
 	
 	return {
