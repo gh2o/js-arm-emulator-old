@@ -354,6 +354,18 @@ var CPU = (function () {
 		ret.end_address = end_address;
 		return ret;
 	}
+
+	function decodeCoprocessor (inst, regs)
+	{
+		var ret = {};
+		ret.opcode_1 = (inst >>> 21) & 0x07;
+		ret.CRn = (inst >>> 16) & 0x0F;
+		ret.Rd = regs[(inst >>> 12) & 0x0F];
+		ret.cp_num = (inst >>> 8) & 0x0F;
+		ret.opcode_2 = (inst >>> 5) & 0x07;
+		ret.CRm = inst & 0x0F;
+		return ret;
+	}
 	
 	function Register (value)
 	{
@@ -377,23 +389,30 @@ var CPU = (function () {
 		};
 	};
 	
+	var attachBits = function (obj, bitmap) {
+		for (var name in bitmap)
+		{
+			if (bitmap.hasOwnProperty (name))
+			{
+				var bit = bitmap[name];
+				obj["get" + name] = makeBitGetter (bit);
+				obj["set" + name] = makeBitSetter (bit);
+			}
+		}
+	};
+	
 	var srp = new Register (0);
-	srp.getN = makeBitGetter (31);
-	srp.setN = makeBitSetter (31);
-	srp.getZ = makeBitGetter (30);
-	srp.setZ = makeBitSetter (30);
-	srp.getC = makeBitGetter (29);
-	srp.setC = makeBitSetter (29);
-	srp.getV = makeBitGetter (28);
-	srp.setV = makeBitSetter (28);
-	srp.getI = makeBitGetter (7);
-	srp.setI = makeBitSetter (7);
-	srp.getF = makeBitGetter (6);
-	srp.setF = makeBitSetter (6);
-	srp.getT = makeBitGetter (5);
-	srp.setT = makeBitSetter (5);
 	srp.getMode = function () { return this.value & 0x1f; };
 	srp.setMode = function (mode) { return (this.value & ~0x1f) | (mode & 0x1f); };
+	attachBits (srp, {
+		N: 31,
+		Z: 30,
+		C: 29,
+		V: 28,
+		I: 7,
+		F: 6,
+		T: 5
+	});
 	
 	function StatusRegister () { Register.apply (this, arguments); }
 	StatusRegister.prototype = srp;
@@ -411,15 +430,22 @@ var CPU = (function () {
 		set: function (x) { this._value = x >>> 0; }
 	});
 	
+	function ControlRegister () { Register.apply (this.arguments); }
+	ControlRegister.prototype.constructor = ControlRegister;
+	attachBits (ControlRegister.prototype, {
+		L2: 26, EE: 25, VE: 24, XP: 23,
+		U:  22, FI: 21, L4: 15, RR: 14,
+		V: 13, I: 12, Z: 11, F: 10,
+		R:  9, S:  8, B:  7, L:  6,
+		D:  5, P:  4, W:  3, C:  2,
+		A:  1, M:  0
+	});
+	
 	function ARM (pmem)
 	{
 		this.pmem = pmem;
 		this.vmem = pmem; // FIXME
 		
-		// FIXME
-		this.Ubit = {};
-		this.Ubit.value = false;
-	
 		var r0 = new Register (0);
 		var r1 = new Register (0);
 		var r2 = new Register (0);
@@ -487,6 +513,8 @@ var CPU = (function () {
 		this.mstatregs[MODE_und] = [cpsr, new StatusRegister (0)];
 		this.mstatregs[MODE_irq] = [cpsr, new StatusRegister (0)];
 		this.mstatregs[MODE_fiq] = [cpsr, new StatusRegister (0)];
+		
+		this.creg = new ControlRegister (0);
 	}
 	
 	ARM.prototype = {
@@ -507,12 +535,16 @@ var CPU = (function () {
 		},
 		tick: function () {
 			var inst = this.vmem.getU32 (this.curpc = this.pc.raw);
-			//console.log ("run " + this.pc.raw.toString (16));
 			this.pc.raw += 4;
 			
 			var cond = (inst >>> 28) & 0xf;
 			if (!evaluateCondition (cond, this.cpsr))
+			{
+				console.log ("skip " + (this.pc.raw - 4).toString (16));
 				return;
+			}
+			else
+				console.log ("eval " + (this.pc.raw - 4).toString (16));
 			
 			if (
 				(inst & 0x0fb0f000) == 0x0320f000 ||
@@ -521,6 +553,8 @@ var CPU = (function () {
 				this.inst_MSR (inst);
 			else if ((inst & 0x0f100010) == 0x0e100010)
 				this.inst_MRC (inst);
+			else if ((inst & 0x0f100010) == 0x0e000010)
+				this.inst_MCR (inst);
 			else if ((inst & 0x0e000000) == 0x0a000000)
 				this.inst_B_BL (inst);
 			else if ((inst & 0x0de00000) == 0x01a00000)
@@ -533,6 +567,8 @@ var CPU = (function () {
 				this.inst_AND (inst);
 			else if ((inst & 0x0de00000) == 0x01800000)
 				this.inst_ORR (inst);
+			else if ((inst & 0x0de00000) == 0x01c00000)
+				this.inst_BIC (inst);
 			else if ((inst & 0x0df00000) == 0x01500000)
 				this.inst_CMP (inst);
 			else if ((inst & 0x0df00000) == 0x01300000)
@@ -609,21 +645,44 @@ var CPU = (function () {
 			}
 		},
 		inst_MRC: function (inst) {
-		
-			var opcode_1 = (inst >>> 21) & 0x07;
-			var CRn = (inst >>> 16) & 0x0F;
-			var Rd = this.getReg ((inst >>> 12) & 0x0F);
-			var cp_num = (inst >>> 8) & 0x0F;
-			var opcode_2 = (inst >>> 5) & 0x07;
-			var CRm = inst & 0x0F;
+
+			var c = decodeCoprocessor (inst, this.getRegs ());
+			if (!(c.cp_num == 15 && c.opcode_1 == 0))
+				throw "MCR not fully implemented";
+			if (c.Rd.value == 15)
+				throw "use of PC for coprocessor";
 			
-			if (
-				cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 &&
-				CRm == 0 && CRn == 0 && Rd != 15
-			)
-				Rd.value = 0x41009200;
+			if (c.CRm == 0 && c.opcode_2 == 0)
+			{
+				c.Rd.value = 0x41009200;
+			}
+			else if (c.CRm == 1 && opcode_2 == 0)
+			{
+				c.Rd.value = this.creg.value;
+			}
 			else
+			{
+				console.log (c);
 				throw "MRC not fully implemented";
+			}
+		},
+		inst_MCR: function (inst) {
+
+			var c = decodeCoprocessor (inst, this.getRegs ());
+			if (!(c.cp_num == 15 && c.opcode_1 == 0))
+				throw "MCR not fully implemented";
+			if (c.Rd.value == 15)
+				throw "use of PC for coprocessor";
+			
+			switch (c.CRn)
+			{
+				case 7: // cache management
+					break;
+				case 8: // memory management
+					break;
+				default:
+					throw "MCR not fully implemented";
+			}
 		},
 		inst_B_BL: function (inst) {
 			var L = !!(inst & (1 << 24))
@@ -659,7 +718,7 @@ var CPU = (function () {
 				function (a, b, r, a31, b31, r31)
 					{ return r == 0; },
 				function (a, b, r, a31, b31, r31)
-					{ return (a31 && b31) || (a31 && !r31) || (b31 && !r31); },
+					{ return (a >>> 0) + (b >>> 0) > 0xFFFFFFFF; },
 				function (a, b, r, a31, b31, r31)
 					{ return (a31 && b31 && !r31) || (!a31 && !b31 && r31); }
 			);
@@ -673,7 +732,7 @@ var CPU = (function () {
 				function (a, b, r, a31, b31, r31)
 					{ return r == 0; },
 				function (a, b, r, a31, b31, r31)
-					{ return (!a31 && b31) || (!a31 && r31) || (b31 && r31); },
+					{ return (b >>> 0) <= (a >>> 0); },
 				function (a, b, r, a31, b31, r31)
 					{ return (!a31 && b31 && r31) || (a31 && !b31 && !r31); }
 			);
@@ -706,6 +765,20 @@ var CPU = (function () {
 					{ return undefined; }
 			);
 		},
+		inst_BIC: function (inst) {
+			commonShifter (inst, this.getRegs (), this.getStatRegs (), false,
+				function (a, b)
+					{ return a & ~b; },
+				function (a, b, r, a31, b31, r31)
+					{ return r31; },
+				function (a, b, r, a31, b31, r31)
+					{ return r == 0; },
+				function (a, b, r, a31, b31, r31, sco)
+					{ return sco; },
+				function (a, b, r, a31, b31, r31)
+					{ return undefined; }
+			);
+		},
 		inst_CMP: function (inst) {
 			commonShifter (inst, this.getRegs (), this.getStatRegs (), true,
 				function (a, b)
@@ -715,7 +788,7 @@ var CPU = (function () {
 				function (a, b, r, a31, b31, r31)
 					{ return r == 0; },
 				function (a, b, r, a31, b31, r31, sco)
-					{ return (!a31 && b31) || (!a31 && r31) || (b31 && r31); },
+					{ return (b >>> 0) <= (a >>> 0); },
 				function (a, b, r, a31, b31, r31)
 					{ return (!a31 && b31 && r31) || (a31 && !b31 && !r31); }
 			);
@@ -752,7 +825,7 @@ var CPU = (function () {
 			var s = preLoadStoreSingle (inst, this.getRegs (), this.getStatRegs ());
 			
 			var data = this.vmem.getU32 (s.address);
-			if (!this.Ubit.value)
+			if (!this.creg.getU ())
 				data = rotateRight (data, 8 * (s.address & 0x03));
 			
 			if (s.Rd.index == 15)
