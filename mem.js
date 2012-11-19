@@ -86,6 +86,9 @@ var Mem = (function () {
 		},
 		
 		get: function (address, func, bytes) {
+			
+			//console.log ("read " + bytes + " bytes at " + address.toString (16));
+		
 			var bn = this.addrToBlockNumber (address);
 			var off = this.addrToBlockOffset (address);
 			if (off <= BLOCK_SIZE - bytes)
@@ -103,7 +106,27 @@ var Mem = (function () {
 			}
 		},
 		
-		getU32: function (address) { return this.get (address, 'getUint32', 4); }
+		getU32: function (address) { return this.get (address, 'getUint32', 4); },
+		
+		put: function (address, func, bytes, data) {
+		
+			//console.log ("write " + bytes + " bytes at " + address.toString (16));
+
+			var bn = this.addrToBlockNumber (address);
+			var off = this.addrToBlockOffset (address);
+			if (off <= BLOCK_SIZE - bytes)
+			{
+				// does not cross page boundaries
+				this.allocateBlock (bn).dv[func](off, data, true);
+			}
+			else
+			{
+				// crosses page boundaries
+				throw "Cross-boundary access not implemented";
+			}
+		},
+		
+		putU32: function (address, data) { return this.put (address, 'setUint32', 4, data); }
 	};
 	
 	return {

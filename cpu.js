@@ -68,7 +68,7 @@ var CPU = (function () {
 			shifter_carry_out = (rotate_imm == 0) ?
 				cpsr.getC () : !!(shifter_operand & (1 << 31));
 		}
-		else if ((inst & 0x0e000070) == 0x00000000)
+		else if ((inst & 0x0e000000) == 0x00000000)
 		{
 			var r = inst & (1 << 4);
 			var s = r ? (Rs.value & 0xFF) : (shift_imm);
@@ -175,7 +175,7 @@ var CPU = (function () {
 		}
 		else
 		{
-			throw "bad shifter instruction";
+			throw new Error ("bad shifter instruction");
 		}
 		
 		ret.shifter_operand = ret.so = shifter_operand;
@@ -219,17 +219,97 @@ var CPU = (function () {
 		}
 	}
 	
+	function preLoadStore (inst)
+	{
+		var ret = {}
+		ret.P = !!(inst & (1 << 24));
+		ret.U = !!(inst & (1 << 23));
+		ret.S = !!(inst & (1 << 22));
+		ret.W = !!(inst & (1 << 21));
+		ret.L = !!(inst & (1 << 20));
+		return ret;
+	}
+	
+	function preLoadStoreSingle (inst, regs, statregs)
+	{
+		if ((inst & 0x0c000000) != 0x04000000)
+			throw "bad load/store single instruction";
+	
+		var ret = preLoadStore (inst);
+		var Rn = ret.Rn = regs[(inst >>> 16) & 0x0F];
+		var Rd = ret.Rd = regs[(inst >>> 12) & 0x0F];
+		
+		var cpsr = statregs[0], spsr = statregs[1];
+		
+		var index;
+		if (ret & (1 << 25))
+		{
+			// (scaled) register offset
+			var shift_imm = (inst >>> 7) & 0x1F;
+			switch ((ret >>> 5) & 0x03)
+			{
+				case 0:
+					index = Rm.value << shift_imm;
+					break;
+				case 1:
+					if (shift_imm == 0)
+						index = 0;
+					else
+						index = Rm.value >>> shift_imm;
+					break;
+				case 2:
+					if (shift_imm == 0)
+						index = (Rm & (1 << 31)) ? 0xFFFFFFFF : 0;
+					else
+						index = Rm.value >> shift_imm;
+					break;
+				case 3:
+					if (shift_imm == 0)
+						index = (cpsr.getC () << 31) | (Rm.value >>> 1);
+					else
+						index = rotateRight (Rm, shift_imm);
+					break;
+			}
+		}
+		else
+		{
+			// immediate offset
+			index = inst & 0x0FFF;
+		}
+		
+		if (!ret.U)
+			index = -index;
+		
+		var address;
+		if (ret.P && !ret.W)
+		{
+			address = Rn.value + index;
+		}
+		else if (ret.P && ret.W)
+		{
+			address = Rn.value + index;
+			Rn.value = address;
+		}
+		else if (!ret.P && !ret.W)
+		{
+			address = Rn.value;
+			Rn.value += index;
+		}
+		else
+		{
+			throw "bad load/store single index";
+		}
+		
+		ret.address = address;
+		return ret;
+	}
+	
 	function preLoadStoreMultiple (inst, regs)
 	{
-		if (inst & 0x0e000000 != 0x08000000)
-			throw "bad load/store multiplee instruction";
+		if ((inst & 0x0e000000) != 0x08000000)
+			throw "bad load/store multiple instruction";
 		
-		var ret = {}
-		var P = ret.P = !!(inst & (1 << 24));
-		var U = ret.U = !!(inst & (1 << 23));
-		var S = ret.S = !!(inst & (1 << 22));
-		var W = ret.W = !!(inst & (1 << 21));
-		var L = ret.L = !!(inst & (1 << 20));
+		var ret = preLoadStore (inst);
 		var Rn = ret.Rn = regs[(inst >>> 16) & 0x0F];
 		var rl = ret.register_list = inst & 0xFFFF;
 		
@@ -242,7 +322,7 @@ var CPU = (function () {
 		
 		var start_address, end_address;
 		
-		switch ((inst >> 24) & 0x03)
+		switch ((inst >> 23) & 0x03)
 		{
 			case 0:
 				start_address = Rn.value - bs4 + 4;
@@ -319,10 +399,26 @@ var CPU = (function () {
 	StatusRegister.prototype = srp;
 	StatusRegister.prototype.constructor = StatusRegister;
 	
+	function ProgramCounter () { Register.apply (this, arguments); }
+	ProgramCounter.prototype = new Register (0);
+	ProgramCounter.prototype.constructor = ProgramCounter;
+	Object.defineProperty (ProgramCounter.prototype, "value", {
+		get: function () { return this._value + 4; },
+		set: function (x) { this._value = x >>> 0; }
+	});
+	Object.defineProperty (ProgramCounter.prototype, "raw", {
+		get: function () { return this._value; },
+		set: function (x) { this._value = x >>> 0; }
+	});
+	
 	function ARM (pmem)
 	{
 		this.pmem = pmem;
 		this.vmem = pmem; // FIXME
+		
+		// FIXME
+		this.Ubit = {};
+		this.Ubit.value = false;
 	
 		var r0 = new Register (0);
 		var r1 = new Register (0);
@@ -339,7 +435,7 @@ var CPU = (function () {
 		var r12 = new Register (0);
 		var r13 = new Register (0);
 		var r14 = new Register (0);
-		var pc = new Register (0);
+		var pc = new ProgramCounter (0);
 		this.pc = pc;
 		this.curpc = 0;
 		
@@ -395,7 +491,7 @@ var CPU = (function () {
 	
 	ARM.prototype = {
 		setPC: function (pc) {
-			this.pc.value = pc;
+			this.pc.raw = pc;
 		},
 		getRegs: function () {
 			return this.mregs[this.cpsr.getMode ()];
@@ -410,9 +506,9 @@ var CPU = (function () {
 			return this.getStatRegs()[reg];
 		},
 		tick: function () {
-			var inst = this.vmem.getU32 (this.curpc = this.pc.value);
-			console.log ("read " + this.curpc.toString (16));
-			this.pc.value += 8;
+			var inst = this.vmem.getU32 (this.curpc = this.pc.raw);
+			//console.log ("run " + this.pc.raw.toString (16));
+			this.pc.raw += 4;
 			
 			var cond = (inst >>> 28) & 0xf;
 			if (!evaluateCondition (cond, this.cpsr))
@@ -435,8 +531,18 @@ var CPU = (function () {
 				this.inst_SUB (inst);
 			else if ((inst & 0x0de00000) == 0x00000000)
 				this.inst_AND (inst);
+			else if ((inst & 0x0de00000) == 0x01800000)
+				this.inst_ORR (inst);
+			else if ((inst & 0x0df00000) == 0x01500000)
+				this.inst_CMP (inst);
 			else if ((inst & 0x0df00000) == 0x01300000)
 				this.inst_TEQ (inst);
+			else if ((inst & 0x0df00000) == 0x01100000)
+				this.inst_TST (inst);
+			else if ((inst & 0x0c500000) == 0x04100000)
+				this.inst_LDR (inst);
+			else if ((inst & 0x0c500000) == 0x04000000)
+				this.inst_STR (inst);
 			else if ((inst & 0x0e500000) == 0x08100000)
 				this.inst_LDM1 (inst);
 			else
@@ -452,8 +558,6 @@ var CPU = (function () {
 				console.log (this.getRegs ());
 				throw "BAD INSTRUCTION";
 			}
-			
-			this.pc.value -= 4;
 		},
 		inst_MSR : function (inst) {
 		
@@ -530,8 +634,7 @@ var CPU = (function () {
 				this.getReg (14).value = this.curpc + 4;
 			
 			var se30 = si24 | ((si24 & (1 << 23)) ? 0xFF000000 : 0);
-			this.pc.value += (se30 << 2) + 4;
-			this.pc.value >>>= 0;
+			this.pc.value += se30 << 2;
 		},
 		inst_MOV: function (inst) {
 			commonShifter (inst, this.getRegs (), this.getStatRegs (), false,
@@ -589,6 +692,34 @@ var CPU = (function () {
 					{ return undefined; }
 			);
 		},
+		inst_ORR: function (inst) {
+			commonShifter (inst, this.getRegs (), this.getStatRegs (), false,
+				function (a, b)
+					{ return a | b; },
+				function (a, b, r, a31, b31, r31)
+					{ return r31; },
+				function (a, b, r, a31, b31, r31)
+					{ return r == 0; },
+				function (a, b, r, a31, b31, r31, sco)
+					{ return sco; },
+				function (a, b, r, a31, b31, r31)
+					{ return undefined; }
+			);
+		},
+		inst_CMP: function (inst) {
+			commonShifter (inst, this.getRegs (), this.getStatRegs (), true,
+				function (a, b)
+					{ return a - b; },
+				function (a, b, r, a31, b31, r31)
+					{ return r31; },
+				function (a, b, r, a31, b31, r31)
+					{ return r == 0; },
+				function (a, b, r, a31, b31, r31, sco)
+					{ return (!a31 && b31) || (!a31 && r31) || (b31 && r31); },
+				function (a, b, r, a31, b31, r31)
+					{ return (!a31 && b31 && r31) || (a31 && !b31 && !r31); }
+			);
+		},
 		inst_TEQ: function (inst) {
 			commonShifter (inst, this.getRegs (), this.getStatRegs (), true,
 				function (a, b)
@@ -602,6 +733,35 @@ var CPU = (function () {
 				function (a, b, r, a31, b31, r31)
 					{ return undefined; }
 			);
+		},
+		inst_TST: function (inst) {
+			commonShifter (inst, this.getRegs (), this.getStatRegs (), true,
+				function (a, b)
+					{ return a & b; },
+				function (a, b, r, a31, b31, r31)
+					{ return r31; },
+				function (a, b, r, a31, b31, r31)
+					{ return r == 0; },
+				function (a, b, r, a31, b31, r31, sco)
+					{ return sco; },
+				function (a, b, r, a31, b31, r31)
+					{ return undefined; }
+			);
+		},
+		inst_LDR: function (inst) {
+			var s = preLoadStoreSingle (inst, this.getRegs (), this.getStatRegs ());
+			
+			var data = this.vmem.getU32 (s.address);
+			if (!this.Ubit.value)
+				data = rotateRight (data, 8 * (s.address & 0x03));
+			
+			if (s.Rd.index == 15)
+				data &= 0xFFFFFFFC;
+			s.Rd.value = data;
+		},
+		inst_STR: function (inst) {
+			var s = preLoadStoreSingle (inst, this.getRegs (), this.getStatRegs ());
+			this.vmem.putU32 (s.address, s.Rd.value);
 		},
 		inst_LDM1: function (inst) {
 			var s = preLoadStoreMultiple (inst, this.getRegs ());
@@ -618,7 +778,7 @@ var CPU = (function () {
 			
 			if (s.register_list & (1 << 15))
 			{
-				this.pc.value = (this.vmem.getU32 (address) & 0xFFFFFFFC) + 4;
+				this.pc.value = this.vmem.getU32 (address) & 0xFFFFFFFC;
 				address += 4;
 			}
 			
