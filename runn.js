@@ -13,4 +13,18 @@ cpu.setPC (kernel.header.e_entry);
 while (true)
 {
 	cpu.tick ();
+	var pc = cpu.pc.raw;
+	if (pc >= 0xc048a49c && pc <= 0xc048a774)
+		console.log ("KERN");
+	/*
+	try {
+		cpu.tick ();
+	} catch (e) {
+		cpu.vmem.pmem.blocks.forEach (function (x, i) {
+			if (x)
+				console.log (i);
+		})
+		throw e;
+	}
+	*/
 }

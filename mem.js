@@ -110,6 +110,8 @@ var Mem = (function () {
 			}
 		},
 		
+		getU8: function (address) { return this.get (address, 'getUint8', 1); },
+		getU16: function (address) { return this.get (address, 'getUint16', 2); },
 		getU32: function (address) { return this.get (address, 'getUint32', 4); },
 		
 		put: function (address, func, bytes, data) {
@@ -130,7 +132,9 @@ var Mem = (function () {
 			}
 		},
 		
-		putU32: function (address, data) { return this.put (address, 'setUint32', 4, data); }
+		putU8: function (address, data) { return this.put (address, 'setUint8', 1, data); },
+		putU16: function (address, data) { return this.put (address, 'setUint16', 2, data); },
+		putU32: function (address, data) { return this.put (address, 'setUint32', 4, data); },
 	};
 	
 	function VirtualMemory (pmem, cpsr, creg)
@@ -148,7 +152,12 @@ var Mem = (function () {
 			if (!this.creg.getM ())
 				return this.pmem.getU32 (address);
 			if (address % 4 != 0)
-				throw "unaligned access";
+			{
+				var ret = 0;
+				for (var i = 0; i < 4; i++)
+					ret |= this.getU8 (address + i) << (i * 8);
+				return ret >>> 0;
+			}
 			return this.pmem.getU32 (this.translate (address,
 				ACC_READ | (execute ? ACC_EXEC : 0)));
 		},
@@ -156,8 +165,40 @@ var Mem = (function () {
 			if (!this.creg.getM ())
 				return this.pmem.putU32 (address, data);
 			if (address % 4 != 0)
-				throw "unaligned access";
-			this.pmem.putU32 (this.translate (address, ACC_WRITE));
+			{
+				for (var i = 0; i < 4; i++)
+					this.putU8 (address + i, (data >>> (i * 8)) & 0xFF);
+				return;
+			}
+			this.pmem.putU32 (this.translate (address, ACC_WRITE), data);
+		},
+		getU16: function (address) {
+			if (!this.creg.getM ())
+				return this.pmem.getU16 (address);
+			if (address % 2 != 0)
+				return this.getU8 (address) | (this.getU8 (address + 1) << 8);
+			return this.pmem.getU16 (this.translate (address, ACC_READ));
+		},
+		putU16: function (address, data) {
+			if (!this.creg.getM ())
+				return this.pmem.putU16 (address, data);
+			if (address % 2 != 0)
+			{
+				this.putU8 (address, data & 0xFF);
+				this.putU8 (address + 1, (data >>> 8) * 0xFF);
+				return;
+			}
+			this.pmem.putU16 (this.translate (address, ACC_WRITE), data);
+		},
+		getU8: function (address) {
+			if (!this.creg.getM ())
+				return this.pmem.getU8 (address);
+			return this.pmem.getU8 (this.translate (address, ACC_READ));
+		},
+		putU8: function (address, data) {
+			if (!this.creg.getM ())
+				return this.pmem.putU8 (address, data);
+			this.pmem.putU8 (this.translate (address, ACC_READ), data);
 		},
 		translate: function (address, access) {
 		
@@ -170,7 +211,7 @@ var Mem = (function () {
 			switch (flDesc & 0x03)
 			{
 				case 0:
-					throw "page fault!";
+					throw new Error ("page fault accessing 0x" + address.toString (16));
 				case 2:
 					if ((flDesc & 0x000f8000) != 0)
 						throw "bad page descriptor";

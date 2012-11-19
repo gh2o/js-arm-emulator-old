@@ -243,9 +243,10 @@ var CPU = (function () {
 		var Rd = ret.Rd = regs[(inst >>> 12) & 0x0F];
 		
 		var cpsr = statregs[0], spsr = statregs[1];
+		var Rm = regs[inst & 0x0F];
 		
 		var index;
-		if (ret & (1 << 25))
+		if (inst & (1 << 25))
 		{
 			// (scaled) register offset
 			var shift_imm = (inst >>> 7) & 0x1F;
@@ -355,6 +356,55 @@ var CPU = (function () {
 		
 		ret.start_address = start_address;
 		ret.end_address = end_address;
+		return ret;
+	}
+	
+	function preLoadStoreMisc (inst, regs)
+	{
+		if ((inst & 0x0e400090) != 0x00400090)
+			throw "bad load/store misc instruction";
+			
+		var ret = preLoadStore (inst);
+		var Rn = ret.Rn = regs[(inst >>> 16) & 0x0F];
+		var Rd = ret.Rd = regs[(inst >>> 12) & 0x0F];
+		
+		var index;
+		if (ret.S)
+		{
+			var immedH = (inst >>> 8) & 0x0F;
+			var immedL = inst & 0x0F;
+			index = (immedH << 4) | immedL;
+		}
+		else
+		{
+			var Rm = regs[inst & 0x0F];
+			index = Rm.value;
+		}
+		
+		if (!(inst & (1 << 23)))
+			index = -index;
+		
+		var address;
+		if (ret.P && ret.S && !ret.W)
+		{
+			address = Rn.value + index;
+		}
+		else if (ret.P && ret.S && ret.W)
+		{
+			address = Rn.value + index;
+			Rn.value = address;
+		}
+		else if (!ret.P && ret.S && !ret.W)
+		{
+			address = Rn.value;
+			Rn.value += index;
+		}
+		else
+		{
+			throw "bad load/store misc index";
+		}
+		
+		ret.address = address;
 		return ret;
 	}
 
@@ -507,7 +557,7 @@ var CPU = (function () {
 			});
 		});
 		
-		var cpsr = this.cpsr = new StatusRegister (0x1d3);
+		var cpsr = this.cpsr = new StatusRegister (0xd3);
 		this.mstatregs = new Array (32);
 		this.mstatregs[MODE_usr] = [cpsr, null];
 		this.mstatregs[MODE_sys] = [cpsr, null];
@@ -549,27 +599,51 @@ var CPU = (function () {
 			else
 				console.log ("eval " + (this.pc.raw - 4).toString (16));
 			
-			if (
+			if ((inst & 0x0ff000f0) == 0x07500050)
+				throw new Error ("undefined instruction!");
+			else if (
 				(inst & 0x0fb0f000) == 0x0320f000 ||
 				(inst & 0x0fb0fff0) == 0x0120f000
 			)
 				this.inst_MSR (inst);
 			else if ((inst & 0x0fbf0fff) == 0x010f0000)
 				this.inst_MRS (inst);
+			else if ((inst & 0x0c500000) == 0x04100000)
+				this.inst_LDR (inst);
+			else if ((inst & 0x0c500000) == 0x04000000)
+				this.inst_STR (inst);
+			else if ((inst & 0x0e5000f0) == 0x005000b0)
+				this.inst_LDRH (inst);
+			else if ((inst & 0x0e5000f0) == 0x004000b0)
+				this.inst_STRH (inst);
+			else if ((inst & 0x0c500000) == 0x04500000)
+				this.inst_LDRB (inst);
+			else if ((inst & 0x0c500000) == 0x04400000)
+				this.inst_STRB (inst);
+			else if ((inst & 0x0e500000) == 0x08100000)
+				this.inst_LDM1 (inst);
+			else if ((inst & 0x0e500000) == 0x08000000)
+				this.inst_STM1 (inst);
 			else if ((inst & 0x0f100010) == 0x0e100010)
 				this.inst_MRC (inst);
 			else if ((inst & 0x0f100010) == 0x0e000010)
 				this.inst_MCR (inst);
 			else if ((inst & 0x0e000000) == 0x0a000000)
 				this.inst_B_BL (inst);
+			else if ((inst & 0x0ffffff0) == 0x012fff10)
+				this.inst_BX (inst);
 			else if ((inst & 0x0de00000) == 0x01a00000)
 				this.inst_MOV (inst);
 			else if ((inst & 0x0de00000) == 0x01e00000)
 				this.inst_MVN (inst);
 			else if ((inst & 0x0de00000) == 0x00800000)
 				this.inst_ADD (inst);
+			else if ((inst & 0x0de00000) == 0x00a00000)
+				this.inst_ADC (inst);
 			else if ((inst & 0x0de00000) == 0x00400000)
 				this.inst_SUB (inst);
+			else if ((inst & 0x0de00000) == 0x00600000)
+				this.inst_RSB (inst);
 			else if ((inst & 0x0de00000) == 0x00000000)
 				this.inst_AND (inst);
 			else if ((inst & 0x0de00000) == 0x01800000)
@@ -578,18 +652,12 @@ var CPU = (function () {
 				this.inst_BIC (inst);
 			else if ((inst & 0x0df00000) == 0x01500000)
 				this.inst_CMP (inst);
+			else if ((inst & 0x0df00000) == 0x01700000)
+				this.inst_CMN (inst);
 			else if ((inst & 0x0df00000) == 0x01300000)
 				this.inst_TEQ (inst);
 			else if ((inst & 0x0df00000) == 0x01100000)
 				this.inst_TST (inst);
-			else if ((inst & 0x0c500000) == 0x04100000)
-				this.inst_LDR (inst);
-			else if ((inst & 0x0c500000) == 0x04000000)
-				this.inst_STR (inst);
-			else if ((inst & 0x0e500000) == 0x08100000)
-				this.inst_LDM1 (inst);
-			else if ((inst & 0x0e500000) == 0x08000000)
-				this.inst_STM1 (inst);
 			else
 			{
 				function hex32 (x)
@@ -619,7 +687,7 @@ var CPU = (function () {
 				operand = Rm.value;
 			
 			if (operand & 0x0FFFFF00)
-				throw 'attempted to set reserved PSR bits';
+				throw 'attempted to set reserved PSR bits : ' + operand.toString (16);
 			
 			var byte_mask =
 				((field_mask & 0x01) ? 0x000000FF : 0) |
@@ -653,6 +721,23 @@ var CPU = (function () {
 					throw "attempted to set SPSR where SPSR doesn't exist";
 			}
 		},
+		inst_MRS: function (inst) {
+			var R = !!(inst & (1 << 22));
+			var Rd = this.getReg ((inst >>> 12) & 0x0F);
+			
+			var cpsr = this.getStatReg (0), spsr = this.getStatReg (1);
+			if (R)
+			{
+				if (spsr)
+					Rd.value = spsr.value;
+				else
+					throw "no SPSR in current mode";
+			}
+			else
+			{
+				Rd.value = cpsr.value;
+			}
+		},
 		inst_MRC: function (inst) {
 
 			var c = decodeCoprocessor (inst, this.getRegs ());
@@ -663,7 +748,11 @@ var CPU = (function () {
 			
 			if (c.CRn == 0 && c.opcode_2 == 0)
 			{
-				c.Rd.value = 0x41009200;
+				c.Rd.value = 0x41069200;
+			}
+			else if (c.CRn == 0 && c.opcode_2 == 1)
+			{
+				c.Rd.value = 0x01000000; // no cache
 			}
 			else if (c.CRn == 1 && c.opcode_2 == 0)
 			{
@@ -722,6 +811,12 @@ var CPU = (function () {
 			var se30 = si24 | ((si24 & (1 << 23)) ? 0xFF000000 : 0);
 			this.pc.value += se30 << 2;
 		},
+		inst_BX: function (inst) {
+			var Rm = this.getReg (inst & 0x0F);
+			if (Rm.value & 0x01)
+				throw "thumb not supported";
+			this.pc.value = Rm.value & ~0x01;
+		},
 		inst_MOV: function (inst) {
 			commonShifter (inst, this.getRegs (), this.getStatRegs (), false,
 				function (a, b)
@@ -764,6 +859,21 @@ var CPU = (function () {
 					{ return (a31 && b31 && !r31) || (!a31 && !b31 && r31); }
 			);
 		},
+		inst_ADC: function (inst) {
+			var c = Number (this.cpsr.getC ());
+			commonShifter (inst, this.getRegs (), this.getStatRegs (), false,
+				function (a, b)
+					{ return a + b + c; },
+				function (a, b, r, a31, b31, r31)
+					{ return r31; },
+				function (a, b, r, a31, b31, r31)
+					{ return r == 0; },
+				function (a, b, r, a31, b31, r31)
+					{ return (a >>> 0) + (b >>> 0) + c > 0xFFFFFFFF; },
+				function (a, b, r, a31, b31, r31)
+					{ return (a31 && b31 && !r31) || (!a31 && !b31 && r31); }
+			);
+		},
 		inst_SUB: function (inst) {
 			commonShifter (inst, this.getRegs (), this.getStatRegs (), false,
 				function (a, b)
@@ -776,6 +886,20 @@ var CPU = (function () {
 					{ return (b >>> 0) <= (a >>> 0); },
 				function (a, b, r, a31, b31, r31)
 					{ return (!a31 && b31 && r31) || (a31 && !b31 && !r31); }
+			);
+		},
+		inst_RSB: function (inst) {
+			commonShifter (inst, this.getRegs (), this.getStatRegs (), false,
+				function (a, b)
+					{ return b - a; },
+				function (a, b, r, a31, b31, r31)
+					{ return r31; },
+				function (a, b, r, a31, b31, r31)
+					{ return r == 0; },
+				function (a, b, r, a31, b31, r31)
+					{ return (a >>> 0) <= (b >>> 0); },
+				function (a, b, r, a31, b31, r31)
+					{ return (!b31 && a31 && r31) || (b31 && !a31 && !r31); }
 			);
 		},
 		inst_AND: function (inst) {
@@ -834,6 +958,20 @@ var CPU = (function () {
 					{ return (!a31 && b31 && r31) || (a31 && !b31 && !r31); }
 			);
 		},
+		inst_CMN: function (inst) {
+			commonShifter (inst, this.getRegs (), this.getStatRegs (), true,
+				function (a, b)
+					{ return a + b; },
+				function (a, b, r, a31, b31, r31)
+					{ return r31; },
+				function (a, b, r, a31, b31, r31)
+					{ return r == 0; },
+				function (a, b, r, a31, b31, r31)
+					{ return (a >>> 0) + (b >>> 0) > 0xFFFFFFFF; },
+				function (a, b, r, a31, b31, r31)
+					{ return (a31 && b31 && !r31) || (!a31 && !b31 && r31); }
+			);
+		},
 		inst_TEQ: function (inst) {
 			commonShifter (inst, this.getRegs (), this.getStatRegs (), true,
 				function (a, b)
@@ -877,6 +1015,22 @@ var CPU = (function () {
 			var s = preLoadStoreSingle (inst, this.getRegs (), this.getStatRegs ());
 			this.vmem.putU32 (s.address, s.Rd.value);
 		},
+		inst_LDRH: function (inst) {
+			var s = preLoadStoreMisc (inst, this.getRegs (), this.getStatRegs ());
+			s.Rd.value = this.vmem.getU16 (s.address);
+		},
+		inst_STRH: function (inst) {
+			var s = preLoadStoreMisc (inst, this.getRegs (), this.getStatRegs ());
+			this.vmem.putU16 (s.address, s.Rd.value & 0xFFFF);
+		},
+		inst_LDRB: function (inst) {
+			var s = preLoadStoreSingle (inst, this.getRegs (), this.getStatRegs ());
+			s.Rd.value = this.vmem.getU8 (s.address);
+		},
+		inst_STRB: function (inst) {
+			var s = preLoadStoreSingle (inst, this.getRegs (), this.getStatRegs ());
+			this.vmem.putU8 (s.address, s.Rd.value & 0xFF);
+		},
 		inst_LDM1: function (inst) {
 			var s = preLoadStoreMultiple (inst, this.getRegs ());
 			
@@ -903,7 +1057,7 @@ var CPU = (function () {
 			var s = preLoadStoreMultiple (inst, this.getRegs ());
 			
 			var address = s.start_address;
-			for (var i = 0; i <= 14; i++)
+			for (var i = 0; i <= 15; i++)
 			{
 				if (s.register_list & (1 << i))
 				{
