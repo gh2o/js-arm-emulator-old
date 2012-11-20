@@ -1,13 +1,13 @@
-var ELF = (function () {
+if (typeof require === "function")
+	var Struct = require ('./struct.js');
 
-	if (typeof require === "function")
-		var Util = require ('./struct.js');
+var ELF = (function () {
 
 	function Loader (dv)
 	{
 		this.dataView = dv;
 	
-		var str = Util.createStruct ([
+		var str = Struct.createStruct ([
 			["e_ident", "u8x16"],
 			["e_type", "u16"],
 			["e_machine", "u16"],
@@ -32,7 +32,7 @@ var ELF = (function () {
 		if (this.header.e_phentsize != 32)
 			throw "Incorrect program header entry size";
 		
-		var phstr = Util.createStruct ([
+		var phstr = Struct.createStruct ([
 			["headers", [
 				["p_type", "u32"],
 				["p_offset", "u32"],
