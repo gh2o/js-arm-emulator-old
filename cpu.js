@@ -234,7 +234,7 @@ var CPU = (function () {
 			var func = item[0];
 			var dec = item[1];
 			
-			var arg = dec (inst, this.getRegs (), this.cpsr);
+			var arg = dec.call (this, inst);
 			func.call (this, arg);
 		},
 	};

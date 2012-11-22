@@ -3,19 +3,23 @@ var Mem = require ("./mem.js");
 var CPU = require ("./cpu.js");
 var FS = require ('fs');
 
-var kernel = new ELF.Loader (new DataView (FS.readFileSync ("./buildroot/vmlinux")));
-
 var pmem = new Mem.PhysicalMemory ();
-kernel.loadInto (pmem);
-
 var cpu = new CPU.ARM (pmem);
+
+var kernel = new ELF.Loader (new DataView (FS.readFileSync ("./buildroot/vmlinux")));
+kernel.loadInto (pmem);
 cpu.setPC (kernel.header.e_entry);
+
+//pmem.putData (0xC0000000, new DataView (FS.readFileSync ("./buildroot/zImage")));
+//cpu.setPC (0xC0000000);
+
 while (true)
 {
+	var oldpc = cpu.pc.raw;
 	cpu.tick ();
 	var pc = cpu.pc.raw;
-	if (pc >= 0xc048a49c && pc <= 0xc048a774)
-		console.log ("KERN");
+	if (pc == 0xc048d7e4 && pc == oldpc)
+		break;
 	/*
 	try {
 		cpu.tick ();

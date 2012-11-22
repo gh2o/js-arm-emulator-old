@@ -34,6 +34,7 @@ var Mem = (function () {
 			
 			var block = this.blocks[bn] = new ArrayBuffer (BLOCK_SIZE);
 			block.dv = new DataView (block);
+			console.log ("block allocated for " + this.blockNumberToBaseAddress (bn).toString (16));
 			return block;
 		},
 		putData: function (address, dv) {

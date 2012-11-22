@@ -4,6 +4,16 @@ var CPUInst = (function () {
 	{
 		return ((val >>> sht) | (val << (32 - sht))) >>> 0;
 	}
+	
+	function bitCount (x)
+	{
+		x = ((x >>> 1) & 0x55555555) + (x & 0x55555555);
+		x = ((x >>> 2) & 0x33333333) + (x & 0x33333333);
+		x = ((x >>> 4) + x) & 0x0F0F0F0F;
+		x = ((x >>> 8) + x) & 0x00FF00FF;
+		x = ((x >>> 16) + x) & 0x0000FFFF;
+		return x;
+	}
 
 	function makeInstructionPredecoder (specs)
 	{
@@ -32,11 +42,11 @@ var CPUInst = (function () {
 			loaders[name] = loader;
 		}
 		
-		return function (inst, regs) {
+		return function (inst) {
 			var ret = {};
 			for (var name in loaders)
 				if (loaders.hasOwnProperty (name))
-					ret[name] = loaders[name](inst, regs);
+					ret[name] = loaders[name].call (this, inst);
 			return ret;
 		};
 		
@@ -44,7 +54,7 @@ var CPUInst = (function () {
 		{
 			if (bit < 0 || bit >= 32)
 				throw "bit out of range";
-			return function (inst, regs) { return !!(inst & (1 << bit)) };
+			return function (inst) { return !!(inst & (1 << bit)) };
 		}
 		
 		function makeBitRangeLoader (upper, lower)
@@ -56,7 +66,7 @@ var CPUInst = (function () {
 			
 			var length = (upper - lower) + 1;
 			var mask = (1 << length) - 1;
-			return function (inst, regs) { return (inst >>> lower) & mask; };
+			return function (inst) { return (inst >>> lower) & mask; };
 		}
 		
 		function makeRegisterLoader (upper, lower)
@@ -65,7 +75,9 @@ var CPUInst = (function () {
 				throw "bits out of range";
 			if (upper - lower != 3)
 				throw "register must be 4 bits in length";
-			return function (inst, regs) { return regs[(inst >>> lower) & 0x0F]; }
+			return function (inst) {
+				return this.getReg ((inst >>> lower) & 0x0F);
+			}
 		}
 	}
 	
@@ -90,9 +102,9 @@ var CPUInst = (function () {
 		use_shift_reg: 4,
 	});
 	
-	function decodeAddrMode1 (inst, regs, cpsr)
+	function decodeAddrMode1 (inst)
 	{
-		var p = predecodeAddrMode1 (inst, regs);
+		var p = predecodeAddrMode1.call (this, inst);
 		
 		var shifter_operand = 0;
 		var shifter_carry_out = false;
@@ -102,7 +114,7 @@ var CPUInst = (function () {
 			// immediate
 			shifter_operand = rotRight (p.immed_8, p.rotate_imm * 2);
 			shifter_carry_out = (p.rotate_imm == 0) ?
-				cpsr.getC () : !!(shifter_operand & (1 << 31));
+				this.cpsr.getC () : !!(shifter_operand & (1 << 31));
 		}
 		else
 		{
@@ -126,7 +138,7 @@ var CPUInst = (function () {
 					if (s == 0)
 					{
 						shifter_operand = p.Rm.value;
-						shifter_carry_out = cpsr.getC ();
+						shifter_carry_out = this.cpsr.getC ();
 					}
 					else if (s < 32)
 					{
@@ -142,7 +154,7 @@ var CPUInst = (function () {
 					if (s == 0)
 					{
 						shifter_operand = p.Rm.value;
-						shifter_carry_out = cpsr.getC ();
+						shifter_carry_out = this.cpsr.getC ();
 					}
 					else if (s < 32)
 					{
@@ -158,7 +170,7 @@ var CPUInst = (function () {
 					if (s == 0)
 					{
 						shifter_operand = p.Rm.value;
-						shifter_carry_out = cpsr.getC ();
+						shifter_carry_out = this.cpsr.getC ();
 					}
 					else if (s < 32)
 					{
@@ -182,7 +194,7 @@ var CPUInst = (function () {
 					else if (s == 0)
 					{
 						shifter_operand = p.Rm.value;
-						shifter_carry_out = cpsr.getC ();
+						shifter_carry_out = this.cpsr.getC ();
 					}
 					else if (ss == 0)
 					{
@@ -223,9 +235,9 @@ var CPUInst = (function () {
 		shift_imm: [11, 7], shift: [6, 5],
 	});
 	
-	function decodeAddrMode2 (inst, regs, cpsr)
+	function decodeAddrMode2 (inst)
 	{
-		var p = predecodeAddrMode2 (inst, regs);
+		var p = predecodeAddrMode2.call (this, inst);
 	
 		var index;
 		if (p.I)
@@ -314,9 +326,9 @@ var CPUInst = (function () {
 		immedH: [11, 8], immedL: [3, 0]
 	});
 	
-	function decodeAddrMode3 (inst, regs, cpsr)
+	function decodeAddrMode3 (inst)
 	{
-		var p = predecodeAddrMode3 (inst, regs);
+		var p = predecodeAddrMode3.call (this, inst);
 		
 		var index;
 		if (p.I)
@@ -352,6 +364,54 @@ var CPUInst = (function () {
 		return p;
 	}
 	
+	function opcodesAddrMode4 (L)
+	{
+		L = L ? (1 << 20) : 0;
+		return [0x08000000 | L, 0x0e100000];
+	}
+	
+	var predecodeAddrMode4 = makeInstructionPredecoder ({
+		P: 24, U: 23, S: 22, W: 21, L: 20,
+		Rn: [19, 16],
+		register_list: [15, 0]
+	});
+	
+	function decodeAddrMode4 (inst)
+	{
+		var p = predecodeAddrMode4.call (this, inst);
+		var bc4 = bitCount (p.register_list) * 4;
+		
+		var start_address, end_address;
+		if (p.U)
+		{
+			start_address = p.Rn.value;
+			end_address = p.Rn.value + bc4 - 4;
+			if (p.P)
+			{
+				start_address += 4;
+				end_address += 4;
+			}
+			if (p.W)
+				p.Rn.value += bc4;
+		}
+		else
+		{
+			start_address = p.Rn.value - bc4 + 4;
+			end_address = p.Rn.value;
+			if (p.P)
+			{
+				start_address -= 4;
+				end_address -= 4;
+			}
+			if (p.W)
+				p.Rn.value -= bc4;
+		}
+		
+		p.start_address = start_address;
+		p.end_address = end_address;
+		return p;
+	}
+	
 	var decodeCoprocessor = makeInstructionPredecoder ({
 		Rd: [15, 12],
 		CRm: [3, 0],
@@ -361,18 +421,90 @@ var CPUInst = (function () {
 		opcode_2: [7, 5],
 	});
 	
+	doALU.STAT_NRM = function (a, b, r, cpsr, p) {
+		cpsr.setC (p.shifter_carry_out);
+		// V in unaffected
+	};
+	
+	doALU.STAT_ADD = function (a, b, r, cpsr, p) {
+		var a31 = !!(a >>> 31);
+		var b31 = !!(b >>> 31);
+		var r31 = !!(r >>> 31);
+		cpsr.setC ((a31 && b31) || (a31 && !r31) || (b31 && !r31));
+		cpsr.setV ((a31 == b31) && (a31 != r31));
+	};
+	
+	doALU.STAT_SUB = function (a, b, r, cpsr, p) {
+		var a31 = !!(a >>> 31);
+		var b31 = !!(b >>> 31);
+		var r31 = !!(r >>> 31);
+		// FIXME: breaks with SBC
+		cpsr.setC (a >= b);
+		cpsr.setV ((a31 != b31) && (a31 != r31));
+	};
+	
+	doALU.STAT_RSB = function (a, b, r, cpsr, b) {
+		return doALU.STAT_SUB (b, a, r, cpsr, b);
+	};
+	
+	function doALU (p, func, stat, write)
+	{
+		var a = p.Rn.value >>> 0;
+		var b = p.shifter_operand >>> 0;
+		var result = func (a, b) >>> 0;
+		if (write)
+			p.Rd.value = result;
+		
+		if (p.S && write && p.Rd.index == 15)
+		{
+			var spsr = this.getStatReg (1);
+			if (spsr)
+				this.cpsr.value = spsr.value;
+			else
+				throw "can't read from SPSR";
+		}
+		else if (p.S)
+		{
+			this.cpsr.setN (!!(result & (1 << 31)));
+			this.cpsr.setZ (result == 0);
+			stat (a, b, result, this.cpsr, p);
+		}
+	}
+	
+	function inst_BX (p)
+	{
+		var addr = p.Rm.value;
+		if (addr & 0x01)
+			throw "thumb not supported";
+		this.pc.value = addr & 0xFFFFFFFC;
+	}
+	
 	function inst_MRC (p)
 	{
 		if (!(p.cp_num == 15 && p.opcode_1 == 0))
-			throw "MCR not fully implemented";
+			throw "MRC not fully implemented";
 		
 		var data;
-		if (p.CRn == 0 && p.opcode_2 == 0)
-			data = 0x41069200;
-		else if (p.CRn == 0 && p.opcode_2 == 1)
-			data = 0x01000000; // no cache
-		else if (p.CRn == 1 && p.opcode_2 == 0)
-			data = this.creg.value;
+		if (p.CRn == 0)
+		{
+			// ID register
+			if (p.CRm != 0)
+				throw "bad ID instruction";
+			if (p.opcode_2 == 0)
+				data = 0x41129200;
+			else if (p.opcode_2 == 1)
+				data = 0x01000000; // no cache
+			else
+				throw "unknown ID instruction"
+		}
+		else if (p.CRn == 1)
+		{
+			// control register
+			if (p.opcode_2 == 0)
+				data = this.creg.value;
+			else
+				throw "unknown control instruction";
+		}
 		else
 		{
 			console.log (p);
@@ -393,7 +525,55 @@ var CPUInst = (function () {
 
 	function inst_MCR (p)
 	{
-		throw "MCR";
+		if (!(p.cp_num == 15 && p.opcode_1 == 0))
+			throw "MCR not fully implemented";
+		
+		var data = p.Rd.value;
+		if (p.CRn == 1)
+		{
+			// control register
+			if (p.opcode_2 == 0)
+				this.creg.value = data;
+			else
+				throw "unknown control instruction";
+		}
+		else if (p.CRn == 2)
+		{
+			// translation table base
+			if (p.CRm != 0 || p.opcode_2 != 0)
+				throw "bad table instruction";
+			this.vmem.regTable = p.Rd.value;
+		}
+		else if (p.CRn == 3)
+		{
+			// domain access control
+			if (p.CRm != 0 || p.opcode_2 != 0)
+				throw "bad domain instruction";
+			this.vmem.regDomains = p.Rd.value;
+		}
+		else if (p.CRn == 7)
+		{
+			// cache management
+			if (p.CRm == 7 && p.opcode_2 == 0)
+				console.log ("=== INVALIDATE UNIFIED CACHE");
+			else if (p.CRm == 10 && p.opcode_2 == 4)
+				console.log ("=== DATA SYNC BARRIER");
+			else
+				throw "unknown cache instruction";
+		}
+		else if (p.CRn == 8)
+		{
+			// TLB functions
+			if (p.CRm == 7 && p.opcode_2 == 0)
+				console.log ("=== INVALIDATE TLB");
+			else
+				throw "unknown TLB instruction";
+		}
+		else
+		{
+			console.log (p);
+			throw "MCR not fully implemented";
+		}
 	}
 	
 	function inst_LDR (p)
@@ -401,7 +581,7 @@ var CPUInst = (function () {
 		var data = this.vmem.getU32 (p.address);
 		if (!this.creg.getU ())
 			data = rotRight (data, 8 * (p.address & 0x03));
-		if (p.Rd.index == 15 && (data & 0xFFFFFFFC) != 0)
+		if (p.Rd.index == 15 && (data & 0x03) != 0)
 			throw "unaligned PC";
 		p.Rd.value = data;
 	}
@@ -435,15 +615,142 @@ var CPUInst = (function () {
 		this.vmem.putU8 (p.address, p.Rd.value & 0xFF);
 	}
 	
-	function inst_ADD (p)
+	function inst_LDM (p)
 	{
-		doALU (p, this.getRegs (), this.cpsr, function (a, b) { return a + b; }, stat_ADD);
-		throw "ADD";
+		if (p.S)
+			throw "S not supported";
+		
+		// LDM (1)
+		var address = p.start_address;
+		
+		for (var i = 0; i <= 14; i++)
+		{
+			if (p.register_list & (1 << i))
+			{
+				this.getReg (i).value = this.vmem.getU32 (address);
+				address += 4;
+			}
+		}
+		
+		if (p.register_list & (1 << 15))
+		{
+			this.pc.value = this.vmem.getU32 (address) & 0xFFFFFFFC;
+			address += 4;
+		}
+		
+		if (address - 4 != p.end_address)
+			throw "offset";
+	}
+	
+	function inst_STM (p)
+	{
+		if (p.S)
+			throw "S not supported";
+		
+		// STM (1)
+		var address = p.start_address;
+		
+		for (var i = 0; i <= 15; i++)
+		{
+			if (p.register_list & (1 << i))
+			{
+				this.vmem.putU32 (address, this.getReg (i).value);
+				address += 4;
+			}
+		}
+
+		if (address - 4 != p.end_address)
+			throw "offset";
+	}
+	
+	function inst_AND (p)
+	{
+		doALU.call (this, p, function (a, b) { return a & b }, doALU.STAT_NRM, true);
+	}
+
+	function inst_EOR (p)
+	{
+		doALU.call (this, p, function (a, b) { return a ^ b }, doALU.STAT_NRM, true);
+	}
+
+	function inst_SUB (p)
+	{
+		doALU.call (this, p, function (a, b) { return a - b; }, doALU.STAT_SUB, true);
+	}
+
+	function inst_RSB (p)
+	{
+		doALU.call (this, p, function (a, b) { return b - a; }, doALU.STAT_RSB, true);
+	}
+	
+	function inst_ADD (p)	
+	{
+		doALU.call (this, p, function (a, b) { return a + b; }, doALU.STAT_ADD, true);
+	}
+	
+	function inst_ADC (p)
+	{
+		var func;
+		if (this.cpsr.getC ())
+			func = function (a, b) { return a + b + 1; };
+		else
+			func = function (a, b) { return a + b; };
+		doALU.call (this, p, func, doALU.STAT_ADD, true);
+	}
+
+	function inst_TST (p)
+	{
+		doALU.call (this, p, function (a, b) { return a & b; }, doALU.STAT_NRM, false);
+	}
+	
+	function inst_TEQ (p)
+	{
+		doALU.call (this, p, function (a, b) { return a ^ b; }, doALU.STAT_NRM, false);
+	}
+	
+	function inst_CMP (p)
+	{
+		doALU.call (this, p, function (a, b) { return a - b; }, doALU.STAT_SUB, false);
+	}
+	
+	function inst_CMN (p)
+	{
+		doALU.call (this, p, function (a, b) { return a + b; }, doALU.STAT_ADD, false);
+	}
+	
+	function inst_ORR (p)
+	{
+		doALU.call (this, p, function (a, b) { return a | b }, doALU.STAT_NRM, true);
+	}
+	
+	function inst_MOV (p)
+	{
+		doALU.call (this, p, function (a, b) { return b; }, doALU.STAT_NRM, true);
+	}
+	
+	function inst_BIC (p)
+	{
+		doALU.call (this, p, function (a, b) { return a & (~b) }, doALU.STAT_NRM, true);
+	}
+
+	function inst_MVN (p)
+	{
+		doALU.call (this, p, function (a, b) { return ~b; }, doALU.STAT_NRM, true);
 	}
 	
 	function inst_MRS (p)
 	{
-		throw "MRS";
+		if (p.R)
+		{
+			var spsr = this.getStatReg (1);
+			if (!spsr)
+				throw "MRS for SPSR in non-SPSR mode";
+			p.Rd.value = spsr.value;
+		}
+		else
+		{
+			p.Rd.value = this.cpsr.value;
+		}
 	}
 	
 	function inst_MSR (p)
@@ -503,6 +810,11 @@ var CPUInst = (function () {
 	
 	var table = [
 		[
+			inst_BX,
+			makeInstructionPredecoder ({Rm: [3, 0]}),
+			[0x012fff10, 0x0ffffff0],
+		],
+		[
 			inst_MRC,
 			decodeCoprocessor,
 			[0x0e100010, 0x0f100010],
@@ -543,9 +855,84 @@ var CPUInst = (function () {
 			opcodesAddrMode2 (true, false),
 		],
 		[
+			inst_LDM,
+			decodeAddrMode4,
+			opcodesAddrMode4 (true),
+		],
+		[
+			inst_STM,
+			decodeAddrMode4,
+			opcodesAddrMode4 (false),
+		],
+		[
+			inst_AND,
+			decodeAddrMode1,
+			opcodesAddrMode1 (0, false),
+		],
+		[
+			inst_EOR,
+			decodeAddrMode1,
+			opcodesAddrMode1 (1, false),
+		],
+		[
+			inst_SUB,
+			decodeAddrMode1,
+			opcodesAddrMode1 (2, false),
+		],
+		[
+			inst_RSB,
+			decodeAddrMode1,
+			opcodesAddrMode1 (3, false),
+		],
+		[
 			inst_ADD,
 			decodeAddrMode1,
 			opcodesAddrMode1 (4, false),
+		],
+		[
+			inst_ADC,
+			decodeAddrMode1,
+			opcodesAddrMode1 (5, false),
+		],
+		[
+			inst_TST,
+			decodeAddrMode1,
+			opcodesAddrMode1 (8, true),
+		],
+		[
+			inst_TEQ,
+			decodeAddrMode1,
+			opcodesAddrMode1 (9, true),
+		],
+		[
+			inst_CMP,
+			decodeAddrMode1,
+			opcodesAddrMode1 (10, true),
+		],
+		[
+			inst_CMN,
+			decodeAddrMode1,
+			opcodesAddrMode1 (11, true),
+		],
+		[
+			inst_ORR,
+			decodeAddrMode1,
+			opcodesAddrMode1 (12, false),
+		],
+		[
+			inst_MOV,
+			decodeAddrMode1,
+			opcodesAddrMode1 (13, false),
+		],
+		[
+			inst_BIC,
+			decodeAddrMode1,
+			opcodesAddrMode1 (14, false),
+		],
+		[
+			inst_MVN,
+			decodeAddrMode1,
+			opcodesAddrMode1 (15, false),
 		],
 		[
 			inst_MRS,
@@ -575,7 +962,7 @@ var CPUInst = (function () {
 		]
 	];
 
-	function decode (inst, regs, cpsr)
+	function decode (inst)
 	{
 		var item;
 		var match = false;
