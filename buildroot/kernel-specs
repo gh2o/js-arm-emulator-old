@@ -1,7 +1,12 @@
-start with at91rm9200_defconfig
+start with versatile_defconfig
 replace all =m with =n
 no kernel modules
 cross prefix
-turn off all board types, leave only EK board
+kernel command line: mem=64M
+turn on DT
 optimize for size
+disable thumb
+enable DT board
+turn on EABI
 turn on LL debugging/printk
+
