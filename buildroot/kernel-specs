@@ -4,3 +4,4 @@ no kernel modules
 cross prefix
 turn off all board types, leave only EK board
 optimize for size
+turn on LL debugging/printk
