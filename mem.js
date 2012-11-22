@@ -32,9 +32,11 @@ var Mem = (function () {
 			if (this.blocks[bn])
 				return (this.blocks[bn]);
 			
+			var addr = this.blockNumberToBaseAddress (bn);
+			Util.debug ("mem", "block allocated for " + Util.hex32 (addr));
+			
 			var block = this.blocks[bn] = new ArrayBuffer (BLOCK_SIZE);
 			block.dv = new DataView (block);
-			console.log ("block allocated for " + this.blockNumberToBaseAddress (bn).toString (16));
 			return block;
 		},
 		putData: function (address, dv) {
@@ -116,7 +118,7 @@ var Mem = (function () {
 		getU32: function (address) { return this.get (address, 'getUint32', 4); },
 		
 		put: function (address, func, bytes, data) {
-		
+
 			//console.log ("write " + bytes + " bytes at " + address.toString (16));
 
 			var bn = this.addrToBlockNumber (address);
@@ -201,6 +203,7 @@ var Mem = (function () {
 				return this.pmem.putU8 (address, data);
 			this.pmem.putU8 (this.translate (address, ACC_READ), data);
 		},
+		/*
 		translate: function (address, access) {
 		
 			var flAddr = (this.regTable & 0xffffc000) | (address >>> 18);
@@ -222,6 +225,7 @@ var Mem = (function () {
 					bmask = 0xFFF00000;
 					break;
 				default:
+					Util.error ("mem", "unsupported page", Util.hex32 (flDesc));
 					throw "unsupported page!";
 			}
 			
@@ -254,10 +258,120 @@ var Mem = (function () {
 			if (access & ~perm)
 				throw "permission fault";
 			
+			// TODO: domains
+			
 			var ret = ((baddr & bmask) | (address & ~bmask)) >>> 0;
 			if (address != ret)
 				console.log (address.toString (16) + " -> " + ret.toString (16));
 			return ret;
+		},
+		*/
+		translate: function (address, access) {
+		
+			var flAddr = (this.regTable & 0xffffc000) | (address >>> 18);
+			flAddr = (flAddr & 0xFFFFFFFC) >>> 0;
+			
+			var flDesc = this.pmem.getU32 (flAddr);
+			switch (flDesc & 0x03)
+			{
+				case 0:
+					throw new Error ("page fault accessing 0x" + address.toString (16));
+				case 2:
+					return this.translateSection (address, access, flDesc) >>> 0;
+				case 1:
+				case 3:
+					return this.translateTable (address, access, flDesc) >>> 0;
+			}
+		},
+		translateSection: function (address, access, desc) {
+			var ap = (desc >>> 10) & 0x03;
+			var domain = (desc >>> 5) & 0x0F;
+			this.checkPermissions (access, domain, ap);
+			var mask = 0xFFF00000;
+			return (desc & mask) | (address & ~mask);
+		},
+		translateTable: function (address, access, desc) {
+		
+			var domain = (desc >>> 5) & 0x0F;
+			
+			var slAddr;
+			if (desc && (1 << 1)) // fine
+				slAddr = (desc & 0xFFFFF000) |
+					((address >>> 8) & 0x00000FFC);
+			else // course
+				slAddr = (desc & 0xFFFFFC00) |
+					((address >>> 10) & 0x000003FC);
+			slAddr >>>= 0;
+			
+			var slDesc = this.pmem.getU32 (slAddr);
+			
+			var mask, apn;
+			switch (slDesc & 0x03)
+			{
+				case 0:
+					throw "page fault";
+				case 1: // large page
+					mask = 0xFFFF0000;
+					apn = (slDesc >>> 14) & 0x03;
+					break;
+				case 2: // small page
+					mask = 0xFFFFF000;
+					apn = (slDesc >>> 10) & 0x03;
+					break;
+				case 3: // tiny page
+					mask = 0xFFFFFC00;
+					apn = 0;
+					break;
+			}
+			
+			var ap = (slDesc >>> (4 + apn * 2)) & 0x03;
+			this.checkPermissions (access, domain, ap);
+			
+			return (slDesc & mask) | (address & ~mask);
+		},
+		checkPermissions: function (access, domain, ap) {
+			var acb = (this.regDomains >>> (domain * 2)) & 0x03;
+			switch (acb)
+			{
+				case 0: // domain fault
+				case 2:
+					throw "domain fault";
+				case 3: // manager mode
+					return;
+			}
+			
+			// check AP
+			var priv = this.cpsr.isPrivileged ();
+			var S = this.creg.getS (), R = this.creg.getR ();
+			if (S && R)
+				throw "bad SR";
+			
+			var perms = 0;
+			switch (ap)
+			{
+				case 0:
+					if (S && !R)
+						perms = priv ? ACC_READ : 0;
+					else if (!S && R)
+						perms = ACC_READ;
+					break;
+				case 1:
+					perms = priv ? (ACC_READ | ACC_WRITE) : 0;
+					break;
+				case 2:
+					perms = priv ? (ACC_READ | ACC_WRITE) : ACC_READ;
+					break;
+				case 3:
+					perms = (ACC_READ | ACC_WRITE);
+					break;
+			}
+			
+			// FIXME: implement XN
+			if (perms & ACC_READ)
+				perms |= ACC_EXEC;
+				
+			if (access & ~perms)
+				throw "permission fault";
 		},
 	};
 	

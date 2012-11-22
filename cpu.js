@@ -73,7 +73,13 @@ var CPU = (function () {
 	ProgramCounter.prototype.constructor = ProgramCounter;
 	Object.defineProperty (ProgramCounter.prototype, "value", {
 		get: function () { return this._value + 4; },
-		set: function (x) { this._value = x >>> 0; }
+		set: function (x) {
+			var ov = this._value - 4;
+			var nv = this._value = x >>> 0;
+//			if (ov)
+//				console.log ("branch from " + Util.hex32 (ov) +
+//					" to " + Util.hex32 (nv));
+		}
 	});
 	Object.defineProperty (ProgramCounter.prototype, "raw", {
 		get: function () { return this._value; },
@@ -212,15 +218,8 @@ var CPU = (function () {
 			var inst = this.vmem.getU32 (this.curpc = this.pc.raw);
 			this.pc.raw += 4;
 			
-			if (this.evaluateCondition (inst))
-			{
-				console.log ("eval " + Util.hex32 (this.curpc));
-			}
-			else
-			{
-				console.log ("skip " + Util.hex32 (this.curpc));
+			if (!this.evaluateCondition (inst))
 				return;
-			}
 			
 			var item = CPUInst.decode (inst);
 			if (!item)
@@ -234,8 +233,14 @@ var CPU = (function () {
 			var func = item[0];
 			var dec = item[1];
 			
-			var arg = dec.call (this, inst);
-			func.call (this, arg);
+			try {
+				var arg = dec.call (this, inst);
+				func.call (this, arg);
+			} catch (e) {
+				Util.error ("cpu", e);
+				Util.error ("cpu", this.getRegs ());
+				throw e;
+			}
 		},
 	};
 	

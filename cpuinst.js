@@ -14,6 +14,22 @@ var CPUInst = (function () {
 		x = ((x >>> 16) + x) & 0x0000FFFF;
 		return x;
 	}
+	
+	function truncMult (a, b)
+	{
+		a >>>= 0;
+		b >>>= 0;
+		
+		var r = a * b;
+		if (r <= 0xFFFFFFFF)
+			return r;
+		
+		r = 0;
+		for (var i = 0; i < 32; i++)
+			if (a & (1 << i))
+				r += b << i;
+		return r >>> 0;
+	}
 
 	function makeInstructionPredecoder (specs)
 	{
@@ -554,18 +570,22 @@ var CPUInst = (function () {
 		else if (p.CRn == 7)
 		{
 			// cache management
-			if (p.CRm == 7 && p.opcode_2 == 0)
-				console.log ("=== INVALIDATE UNIFIED CACHE");
+			if (p.CRm == 5 && p.opcode_2 == 1)
+				Util.info ("cache", "invalidate instructon cache line");
+			else if (p.CRm == 7 && p.opcode_2 == 0)
+				Util.info ("cache", "invalidate unified cache");
 			else if (p.CRm == 10 && p.opcode_2 == 4)
-				console.log ("=== DATA SYNC BARRIER");
+				Util.info ("cache", "data sync barrier");
+			else if (p.CRm == 10 && p.opcode_2 == 1)
+				Util.info ("cache", "clean data cache line");
 			else
-				throw "unknown cache instruction";
+				throw "unknown cache instruction: " + p.CRm + " / " + p.opcode_2;
 		}
 		else if (p.CRn == 8)
 		{
 			// TLB functions
 			if (p.CRm == 7 && p.opcode_2 == 0)
-				console.log ("=== INVALIDATE TLB");
+				Util.info ("cache", "invalidate TLB");
 			else
 				throw "unknown TLB instruction";
 		}
@@ -661,6 +681,24 @@ var CPUInst = (function () {
 
 		if (address - 4 != p.end_address)
 			throw "offset";
+	}
+	
+	function inst_MUL_MLA (p)
+	{
+		var value = truncMult (p.Rm.value, p.Rs.value);
+		if (p.A)
+			value += p.Rn.value;
+		else if (p.Rn.index != 0)
+			throw "bad MUL instruction";
+		
+		p.Rd.value = value;
+		
+		if (p.S)
+		{
+			var r = p.Rd.value;
+			this.cpsr.setN (!!(r & (1 << 31)));
+			this.cpsr.setZ (r == 0);
+		}
 	}
 	
 	function inst_AND (p)
@@ -863,6 +901,14 @@ var CPUInst = (function () {
 			inst_STM,
 			decodeAddrMode4,
 			opcodesAddrMode4 (false),
+		],
+		[
+			inst_MUL_MLA,
+			makeInstructionPredecoder ({
+				A: 21, S: 20,
+				Rd: [19, 16], Rn: [15, 12], Rs: [11, 8], Rm: [3, 0]
+			}),
+			[0x00000090, 0x0fc00090],
 		],
 		[
 			inst_AND,

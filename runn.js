@@ -1,6 +1,7 @@
 var ELF = require ("./elf.js");
 var Mem = require ("./mem.js");
 var CPU = require ("./cpu.js");
+var Util = require ("./util.js");
 var FS = require ('fs');
 
 var pmem = new Mem.PhysicalMemory ();
@@ -18,8 +19,15 @@ while (true)
 	var oldpc = cpu.pc.raw;
 	cpu.tick ();
 	var pc = cpu.pc.raw;
-	if (pc == 0xc048d7e4 && pc == oldpc)
+	
+	if (pc == 0xc046a06c)
+		Util.info ("regs", cpu.getRegs ());
+	
+	if (pc == oldpc)
+	{
+		console.log ("hang... @", Util.hex32 (pc));
 		break;
+	}
 	/*
 	try {
 		cpu.tick ();

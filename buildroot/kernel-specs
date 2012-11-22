@@ -2,6 +2,5 @@ start with at91rm9200_defconfig
 replace all =m with =n
 no kernel modules
 cross prefix
-turn on FDT
 turn off all board types, leave only EK board
 optimize for size
