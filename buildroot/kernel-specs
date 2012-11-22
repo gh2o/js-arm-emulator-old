@@ -3,5 +3,5 @@ replace all =m with =n
 no kernel modules
 cross prefix
 turn on FDT
-turn off all board types, leave only DT board
+turn off all board types, leave only EK board
 optimize for size

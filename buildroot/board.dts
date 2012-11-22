@@ -1,28 +1,5 @@
 /dts-v1/;
 
 / {
-	#address-cells = <1>;
-	#size-cells = <1>;
-	
-	model = "JS ARM Emulator";
-	compatible = "atmel,at91rm9200";
-	interrupt-parent = <&aic>;
-	
-	aliases {
-		serial0 = &usart0;
-	};
-	
-	chosen {
-		bootargs = "mem=64M console=ttyS0,115200";
-	};
-	
-	cpus {
-		cpu@0 {
-			compatible = "arm,arm920t";
-		};
-	};
-	
-	memory {
-		reg = <0x20000000 0x04000000>;
-	};
+	asdeastsay = "tadrfrsedy";
 };
