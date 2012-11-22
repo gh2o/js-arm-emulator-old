@@ -3,6 +3,7 @@ if (typeof require === "function")
 	Mem = require ('./mem.js');
 	CPUInst = require ('./cpuinst.js');
 	Util = require ('./util.js');
+	Peripheral = require ('./peripheral.js');
 }
 
 var CPU = (function () {
@@ -18,6 +19,7 @@ var CPU = (function () {
 	
 	function Register (value)
 	{
+		this.index = -1;
 		this.value = value || 0;
 	}
 	
@@ -169,7 +171,12 @@ var CPU = (function () {
 		this.mstatregs[MODE_irq] = [cpsr, new StatusRegister (0)];
 		this.mstatregs[MODE_fiq] = [cpsr, new StatusRegister (0)];
 		
-		this.vmem = new Mem.VirtualMemory (pmem, this.cpsr, this.creg);
+		this.permem = new Mem.PeripheralMemory (pmem);
+		this.permem.peripherals.push (new Peripheral.DBGU (0xFFFFF200));
+		this.permem.peripherals.push (new Peripheral.PMC (0xFFFFFC00));
+		this.permem.peripherals.push (new Peripheral.Canary ());
+		
+		this.vmem = new Mem.VirtualMemory (this.permem, this.cpsr, this.creg);
 	}
 	
 	ARM.prototype = {
@@ -238,7 +245,10 @@ var CPU = (function () {
 				func.call (this, arg);
 			} catch (e) {
 				Util.error ("cpu", e);
+				Util.error ("cpu", "current PC:", Util.hex32 (this.curpc));
 				Util.error ("cpu", this.getRegs ());
+				if (e instanceof Mem.TranslationError)
+					this.vmem.dump ();
 				throw e;
 			}
 		},

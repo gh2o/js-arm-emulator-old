@@ -50,7 +50,7 @@ var CPUInst = (function () {
 			{
 				var upper = spec[0];
 				var lower = spec[1];
-				if (name.match (/^R[a-z]$/))
+				if (name.match (/^R[a-z][A-Za-z]*$/))
 					loader = makeRegisterLoader (upper, lower);
 				else
 					loader = makeBitRangeLoader (upper, lower);
@@ -507,7 +507,7 @@ var CPUInst = (function () {
 			if (p.CRm != 0)
 				throw "bad ID instruction";
 			if (p.opcode_2 == 0)
-				data = 0x41129200;
+				data = 0; // 0x41129200;
 			else if (p.opcode_2 == 1)
 				data = 0x01000000; // no cache
 			else
@@ -570,22 +570,32 @@ var CPUInst = (function () {
 		else if (p.CRn == 7)
 		{
 			// cache management
-			if (p.CRm == 5 && p.opcode_2 == 1)
-				Util.info ("cache", "invalidate instructon cache line");
+			if (p.CRm == 5 && p.opcode_2 == 0)
+				Util.debug ("cache", "invalidate entire instructon cache");
+			else if (p.CRm == 5 && p.opcode_2 == 1)
+				Util.debug ("cache", "invalidate instructon cache line");
 			else if (p.CRm == 7 && p.opcode_2 == 0)
-				Util.info ("cache", "invalidate unified cache");
+				Util.debug ("cache", "invalidate unified cache");
 			else if (p.CRm == 10 && p.opcode_2 == 4)
-				Util.info ("cache", "data sync barrier");
+				Util.debug ("cache", "data sync barrier");
 			else if (p.CRm == 10 && p.opcode_2 == 1)
-				Util.info ("cache", "clean data cache line");
+				Util.debug ("cache", "clean data cache line");
+			else if (p.CRm == 14 && p.opcode_2 == 1)
+				Util.debug ("cache", "clean and invalidate data cache line");
+			else if (p.CRm == 14 && p.opcode_2 == 2)
+				Util.debug ("cache", "clean and invalidate data cache line");
 			else
 				throw "unknown cache instruction: " + p.CRm + " / " + p.opcode_2;
 		}
 		else if (p.CRn == 8)
 		{
 			// TLB functions
-			if (p.CRm == 7 && p.opcode_2 == 0)
-				Util.info ("cache", "invalidate TLB");
+			if (p.CRm == 5 && p.opcode_2 == 0)
+				Util.debug ("cache", "invalidate entire instruction TLB");
+			else if (p.CRm == 6 && p.opcode_2 == 0)
+				Util.debug ("cache", "invalidate entire data TLB");
+			else if (p.CRm == 7 && p.opcode_2 == 0)
+				Util.debug ("cache", "invalidate TLB");
 			else
 				throw "unknown TLB instruction";
 		}
@@ -701,6 +711,66 @@ var CPUInst = (function () {
 		}
 	}
 	
+	function inst_UMULL_UMLAL (p)
+	{
+		var ahi = p.Rm.value >>> 16;
+		var alo = p.Rm.value & 0xFFFF;
+		var bhi = p.Rs.value >>> 16;
+		var blo = p.Rs.value & 0xFFFF;
+		
+		var hi = ahi * bhi;
+		var lo = alo * blo;
+		
+		var med = ahi * blo + alo * bhi;
+		if (med >= 0x100000000) // will be ignored later so add it now
+			hi += 0x10000;
+		
+		hi += (med >>> 16) & 0xFFFF;
+		lo += (med << 16) >>> 0;
+		
+		if (lo >= 0x100000000)
+		{
+			hi += 1;
+			lo >>>= 0;
+		}
+		
+		if (p.A)
+		{
+			hi += p.RdHi.value;
+			lo += p.RdLo.value;
+			if (lo >= 0x100000000)
+			{
+				hi += 1;
+				lo >>>= 0;
+			}
+		}
+		
+		// scuff out any high bits left
+		hi >>>= 0;
+		lo >>>= 0;
+		
+		// store it back
+		p.RdHi.value = hi;
+		p.RdLo.value = lo;
+		
+		// status
+		if (p.S)
+		{
+			this.cpsr.setN (!!(hi & (1 << 31)));
+			this.cpsr.setZ (hi == 0 && lo == 0);
+		}
+	}
+	
+	function inst_SWP (p)
+	{
+		var address = p.Rn.value;
+		var temp = this.vmem.getU32 (address);
+		if (!this.creg.getU ())
+			temp = rotRight (temp, 8 * (address & 0x03));
+		this.vmem.putU32 (address, p.Rm.value);
+		p.Rd.value = temp;
+	}
+	
 	function inst_AND (p)
 	{
 		doALU.call (this, p, function (a, b) { return a & b }, doALU.STAT_NRM, true);
@@ -734,6 +804,16 @@ var CPUInst = (function () {
 		else
 			func = function (a, b) { return a + b; };
 		doALU.call (this, p, func, doALU.STAT_ADD, true);
+	}
+	
+	function inst_RSC (p)
+	{
+		var func;
+		if (this.cpsr.getC ())
+			func = function (a, b) { return b - a; };
+		else
+			func = function (a, b) { return b - a - 1; };
+		doALU.call (this, p, func, doALU.STAT_RSC, true);
 	}
 
 	function inst_TST (p)
@@ -911,6 +991,22 @@ var CPUInst = (function () {
 			[0x00000090, 0x0fc00090],
 		],
 		[
+			inst_UMULL_UMLAL,
+			makeInstructionPredecoder ({
+				A: 21, S: 20,
+				RdHi: [19, 16], RdLo: [15, 12],
+				Rs: [11, 8], Rm: [3, 0],
+			}),
+			[0x00800090, 0x0fc000f0]
+		],
+		[
+			inst_SWP,
+			makeInstructionPredecoder ({
+				Rn: [19, 16], Rd: [15, 12], Rm: [3, 0]
+			}),
+			[0x01000090, 0x0ff00ff0],
+		],
+		[
 			inst_AND,
 			decodeAddrMode1,
 			opcodesAddrMode1 (0, false),
@@ -939,6 +1035,11 @@ var CPUInst = (function () {
 			inst_ADC,
 			decodeAddrMode1,
 			opcodesAddrMode1 (5, false),
+		],
+		[
+			inst_RSC,
+			decodeAddrMode1,
+			opcodesAddrMode1 (7, false),
 		],
 		[
 			inst_TST,

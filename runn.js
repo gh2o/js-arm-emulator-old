@@ -11,32 +11,43 @@ var kernel = new ELF.Loader (new DataView (FS.readFileSync ("./buildroot/vmlinux
 kernel.loadInto (pmem);
 cpu.setPC (kernel.header.e_entry);
 
-//pmem.putData (0xC0000000, new DataView (FS.readFileSync ("./buildroot/zImage")));
-//cpu.setPC (0xC0000000);
+var fdt_loc = 0x10000000;
+pmem.putData (fdt_loc, new DataView (FS.readFileSync ("./board.dtb")));
+cpu.getReg (2).value = fdt_loc;
+
+// setup ATAGs
+/*
+var atag_start = 1 << 20;
+cpu.getReg (2).value = atag_start;
+
+var ata = atag_start - 4;
+
+pmem.putU32 (ata += 4, 5); // size of header in words
+pmem.putU32 (ata += 4, 0x54410001); // ATAG_CORE
+pmem.putU32 (ata += 4, 1); // flags
+pmem.putU32 (ata += 4, 4096); // page size
+pmem.putU32 (ata += 4, 0xff); // rootdev
+
+pmem.putU32 (ata += 4, 4);
+pmem.putU32 (ata += 4, 0x54410002); // ATAG_MEM
+pmem.putU32 (ata += 4, 0x04000000); // size of memory
+pmem.putU32 (ata += 4, 0x20000000); // start address
+
+pmem.putU32 (ata += 4, 0);
+pmem.putU32 (ata += 4, 0); // ATAG_NONE
+*/
 
 while (true)
 {
+	console.log (Util.hex32 (cpu.pc.raw));
+
 	var oldpc = cpu.pc.raw;
 	cpu.tick ();
 	var pc = cpu.pc.raw;
-	
-	if (pc == 0xc046a06c)
-		Util.info ("regs", cpu.getRegs ());
 	
 	if (pc == oldpc)
 	{
 		console.log ("hang... @", Util.hex32 (pc));
 		break;
 	}
-	/*
-	try {
-		cpu.tick ();
-	} catch (e) {
-		cpu.vmem.pmem.blocks.forEach (function (x, i) {
-			if (x)
-				console.log (i);
-		})
-		throw e;
-	}
-	*/
 }

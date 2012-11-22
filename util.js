@@ -5,7 +5,7 @@ var Util = (function () {
 	var WARN = [30, "warning"];
 	var ERROR = [40, "error"];
 	
-	var loglevel = 25;
+	var loglevel = 15;
 	function _log (msglevel, args)
 	{
 		if (msglevel[0] < loglevel)

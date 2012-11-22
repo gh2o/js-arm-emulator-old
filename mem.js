@@ -93,9 +93,9 @@ var Mem = (function () {
 		},
 		
 		get: function (address, func, bytes) {
-			
-			//console.log ("read " + bytes + " bytes at " + address.toString (16));
 		
+			//console.log ("read " + bytes + " bytes at " + address.toString (16));
+			
 			var bn = this.addrToBlockNumber (address);
 			var off = this.addrToBlockOffset (address);
 			if (off <= BLOCK_SIZE - bytes)
@@ -139,6 +139,14 @@ var Mem = (function () {
 		putU16: function (address, data) { return this.put (address, 'setUint16', 2, data); },
 		putU32: function (address, data) { return this.put (address, 'setUint32', 4, data); },
 	};
+	
+	TranslationError.prototype = new Error ();
+	function TranslationError (address)
+	{
+		this.address = address;
+		this.message = "cannot translate " + Util.hex32 (address);
+		this.stack = new Error (this.message).stack;
+	}
 	
 	function VirtualMemory (pmem, cpsr, creg)
 	{
@@ -203,69 +211,6 @@ var Mem = (function () {
 				return this.pmem.putU8 (address, data);
 			this.pmem.putU8 (this.translate (address, ACC_READ), data);
 		},
-		/*
-		translate: function (address, access) {
-		
-			var flAddr = (this.regTable & 0xffffc000) | (address >>> 18);
-			flAddr = (flAddr & 0xFFFFFFFC) >>> 0;
-			
-			var ap, dom, baddr, bmask;
-			
-			var flDesc = this.pmem.getU32 (flAddr);
-			switch (flDesc & 0x03)
-			{
-				case 0:
-					throw new Error ("page fault accessing 0x" + address.toString (16));
-				case 2:
-					if ((flDesc & 0x000f8000) != 0)
-						throw "bad page descriptor";
-					ap = (flDesc >>> 10) & 0x03;
-					dom = (flDesc >>> 5) & 0x0F;
-					baddr = flDesc;
-					bmask = 0xFFF00000;
-					break;
-				default:
-					Util.error ("mem", "unsupported page", Util.hex32 (flDesc));
-					throw "unsupported page!";
-			}
-			
-			var S = this.creg.getS (), R = this.creg.getR ();
-			if (!S && !R && ap == 0)
-				throw "permission fault!";
-			
-			var privPerm = 0, userPerm = 0;
-			switch (ap)
-			{
-				case 0:
-					if (!S && R)
-						privPerm = userPerm = ACC_READ;
-					else if (S && !R)
-						privPerm = ACC_READ;
-					break;
-				case 1:
-					privPerm = ACC_READ | ACC_WRITE;
-					break;
-				case 2:
-					privPerm = ACC_READ | ACC_WRITE;
-					userPerm = ACC_READ;
-					break;
-				case 3:
-					privPerm = userPerm = ACC_READ | ACC_WRITE;
-					break;
-			}
-			
-			var perm = this.cpsr.isPrivileged () ? privPerm : userPerm;
-			if (access & ~perm)
-				throw "permission fault";
-			
-			// TODO: domains
-			
-			var ret = ((baddr & bmask) | (address & ~bmask)) >>> 0;
-			if (address != ret)
-				console.log (address.toString (16) + " -> " + ret.toString (16));
-			return ret;
-		},
-		*/
 		translate: function (address, access) {
 		
 			var flAddr = (this.regTable & 0xffffc000) | (address >>> 18);
@@ -275,7 +220,7 @@ var Mem = (function () {
 			switch (flDesc & 0x03)
 			{
 				case 0:
-					throw new Error ("page fault accessing 0x" + address.toString (16));
+					throw new TranslationError (address);
 				case 2:
 					return this.translateSection (address, access, flDesc) >>> 0;
 				case 1:
@@ -295,7 +240,7 @@ var Mem = (function () {
 			var domain = (desc >>> 5) & 0x0F;
 			
 			var slAddr;
-			if (desc && (1 << 1)) // fine
+			if (desc & (1 << 1)) // fine
 				slAddr = (desc & 0xFFFFF000) |
 					((address >>> 8) & 0x00000FFC);
 			else // course
@@ -373,11 +318,104 @@ var Mem = (function () {
 			if (access & ~perms)
 				throw "permission fault";
 		},
+		dump: function () {
+			for (var i = 0; i < 0x100000000; i += 0x1000)
+			{
+				var istart = i;
+				var ostart;
+				
+				try {
+					ostart = this.translate (i, 0);
+				} catch (e) {
+					if (e instanceof TranslationError)
+						continue;
+					else
+						throw e;
+				}
+				
+				Util.info ("dump", Util.hex32 (istart), "->", Util.hex32 (ostart));
+			}
+		},
+	};
+	
+	function PeripheralMemory (pmem)
+	{
+		this.pmem = pmem;
+		this.peripherals = [];
+	}
+	
+	PeripheralMemory.prototype = {
+		peripheralAtAddress: function (address) {
+			for (var i = 0; i < this.peripherals.length; i++)
+			{
+				var p = this.peripherals[i];
+				if (address >= p.start && address <= p.end)
+					return p;
+			}
+		},
+		getU8: function (address) {
+			if (this.peripheralAtAddress (address))
+			{
+				if (address & 0x03)
+					throw "unaligned peripheral read";
+				return this.getU32 (address) & 0xFF;
+			}
+			return this.pmem.getU8.apply (this.pmem, arguments);
+		},
+		getU16: function (address) {
+			if (this.peripheralAtAddress (address))
+			{
+				if (address & 0x03)
+					throw "unaligned peripheral read";
+				return this.getU32 (address) & 0xFFFF;
+			}
+			return this.pmem.getU16.apply (this.pmem, arguments);
+		},
+		getU32: function (address) {
+			var p = this.peripheralAtAddress (address);
+			if (p)
+			{
+				if (address & 0x03)
+					throw "unaligned peripheral read";
+				return p.read (address - p.start) >>> 0;
+			}
+			return this.pmem.getU32.apply (this.pmem, arguments);
+		},
+		putU8: function (address, data) {
+			if (this.peripheralAtAddress (address))
+			{
+				if (address & 0x03)
+					throw "unaligned peripheral write";
+				return this.putU32 (address, data & 0xFF);
+			}
+			return this.pmem.putU8.apply (this.pmem, arguments);
+		},
+		putU16: function (address, data) {
+			if (this.peripheralAtAddress (address))
+			{
+				if (address & 0x03)
+					throw "unaligned peripheral write";
+				return this.putU32 (address, data & 0xFFFF);
+			}
+			return this.pmem.putU16.apply (this.pmem, arguments);
+		},
+		putU32: function (address, data) {
+			var p = this.peripheralAtAddress (address);
+			if (p)
+			{
+				if (address & 0x03)
+					throw "unaligned peripheral read";
+				return p.write (address - p.start, data >>> 0);
+			}
+			return this.pmem.putU32.apply (this.pmem, arguments);
+		},
 	};
 	
 	return {
 		PhysicalMemory: PhysicalMemory,
-		VirtualMemory: VirtualMemory
+		VirtualMemory: VirtualMemory,
+		PeripheralMemory: PeripheralMemory,
+		TranslationError: TranslationError,
 	};
 	
 })();
