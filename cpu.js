@@ -172,9 +172,11 @@ var CPU = (function () {
 		this.mstatregs[MODE_fiq] = [cpsr, new StatusRegister (0)];
 		
 		this.permem = new Mem.PeripheralMemory (pmem);
-		this.permem.peripherals.push (new Peripheral.DBGU (0xFFFFF200));
-		this.permem.peripherals.push (new Peripheral.PMC (0xFFFFFC00));
-		this.permem.peripherals.push (new Peripheral.Canary ());
+		this.permem.peripherals.push (new Peripheral.System ());
+		this.permem.peripherals.push (new Peripheral.UART (0x101F1000));
+		this.permem.peripherals.push (new Peripheral.Canary (0x00000000, 0xC0000000));
+		this.permem.peripherals.push (new Peripheral.Canary (0xC8000000, 0xD0000000));
+		this.permem.peripherals.push (new Peripheral.Canary (0xD4000000, 0x100000000));
 		
 		this.vmem = new Mem.VirtualMemory (this.permem, this.cpsr, this.creg);
 	}
@@ -198,8 +200,6 @@ var CPU = (function () {
 		evaluateCondition: function (inst)
 		{
 			var cond = (inst >>> 28) & 0x0F;
-			if (cond == 0x0F)
-				throw "0b1111 condition not supported";
 		
 			var
 				Z = this.cpsr.getZ (),
@@ -218,7 +218,7 @@ var CPU = (function () {
 				(N == V) && !Z,
 				(N != V) || Z,
 				true,
-				false
+				true,
 			][cond];
 		},
 		tick: function () {
@@ -237,6 +237,9 @@ var CPU = (function () {
 				throw "bad instruction";
 			}
 			
+			//if (this.curpc >= 0xc0020c2c && this.curpc < 0xc0020fa4)
+			//	console.log (Util.hex32 (this.curpc), ":", item[0].name);
+			
 			var func = item[0];
 			var dec = item[1];
 			
@@ -247,8 +250,8 @@ var CPU = (function () {
 				Util.error ("cpu", e);
 				Util.error ("cpu", "current PC:", Util.hex32 (this.curpc));
 				Util.error ("cpu", this.getRegs ());
-				if (e instanceof Mem.TranslationError)
-					this.vmem.dump ();
+//				if (e instanceof Mem.TranslationError)
+//					this.vmem.dump ();
 				throw e;
 			}
 		},

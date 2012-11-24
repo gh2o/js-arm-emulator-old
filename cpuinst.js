@@ -317,22 +317,20 @@ var CPUInst = (function () {
 		return p;
 	}
 	
-	function opcodesAddrMode3 (L)
+	function opcodesAddrMode3 (L, S, H)
 	{
 		L = L ? (1 << 20) : 0;
+		S = S ? (1 << 6) : 0;
+		H = H ? (1 << 5) : 0;
 		
 		return [
 			// value, mask
 			
 			// immediate
-			0x004000b0 | L, 0x0e5000f0, // S=0, H=1
-			0x004000d0 | L, 0x0e5000f0, // S=1, H=0
-			0x004000f0 | L, 0x0e5000f0, // S=1, H=1
+			0x00400090 | L | S | H, 0x0e5000f0,
 			
 			// register
-			0x000000b0 | L, 0x0e500ff0, // S=0, H=1
-			0x000000d0 | L, 0x0e500ff0, // S=1, H=0
-			0x000000f0 | L, 0x0e500ff0, // S=1, H=1
+			0x00000090 | L | S | H, 0x0e500ff0,
 		];
 	}
 	
@@ -487,11 +485,13 @@ var CPUInst = (function () {
 		}
 	}
 	
-	function inst_BX (p)
+	function inst_BX_BLX (p)
 	{
 		var addr = p.Rm.value;
 		if (addr & 0x01)
 			throw "thumb not supported";
+		if (p.L)
+			this.getReg (14).value = this.curpc + 4;
 		this.pc.value = addr & 0xFFFFFFFC;
 	}
 	
@@ -507,7 +507,7 @@ var CPUInst = (function () {
 			if (p.CRm != 0)
 				throw "bad ID instruction";
 			if (p.opcode_2 == 0)
-				data = 0; // 0x41129200;
+				data = 0x41069260;
 			else if (p.opcode_2 == 1)
 				data = 0x01000000; // no cache
 			else
@@ -521,6 +521,13 @@ var CPUInst = (function () {
 			else
 				throw "unknown control instruction";
 		}
+		else if (p.CRn == 7)
+		{
+			if (p.CRm == 14 && p.opcode_2 == 3)
+				data = -1;
+			else
+				throw "unknown cache instruction";
+		}
 		else
 		{
 			console.log (p);
@@ -531,7 +538,7 @@ var CPUInst = (function () {
 		{
 			var cpsr = this.cpsr;
 			var mask = 0xF0000000;
-			cpsr.value = (cpsr.value & ~mask) | (cpsr & mask);
+			cpsr.value = (cpsr.value & ~mask) | (data & mask);
 		}
 		else
 		{
@@ -645,6 +652,48 @@ var CPUInst = (function () {
 		this.vmem.putU8 (p.address, p.Rd.value & 0xFF);
 	}
 	
+	function inst_LDRSH (p)
+	{
+		var data = this.vmem.getU16 (p.address);
+		if (!this.creg.getU () && (p.address & 0x01) != 0)
+			throw "unaligned halfword access";
+		p.Rd.value = (data << 16) >> 16; // sign extend 16 bits
+	}
+	
+	function inst_LDRD (p)
+	{
+		if (
+			(p.Rd.index % 2 == 0) && (p.Rd.index != 14) &&
+			((p.address & 0x03) == 0x00) &&
+			(this.creg.getU () || (p.address & (1 << 2)) == 0)
+		)
+		{
+			p.Rd.value = this.vmem.getU32 (p.address);
+			this.getReg (p.Rd.index + 1).value = this.vmem.getU32 (p.address + 4);
+		}
+		else
+		{
+			throw "bad LDRD";
+		}
+	}
+	
+	function inst_STRD (p)
+	{
+		if (
+			(p.Rd.index % 2 == 0) && (p.Rd.index != 14) &&
+			((p.address & 0x03) == 0x00) &&
+			(this.creg.getU () || (p.address & (1 << 2)) == 0)
+		)
+		{
+			this.vmem.putU32 (p.address, p.Rd.value);
+			this.vmem.putU32 (p.address + 4, this.getReg (p.Rd.index + 1).value);
+		}
+		else
+		{
+			throw "bad STRD";
+		}
+	}
+	
 	function inst_LDM (p)
 	{
 		if (p.S)
@@ -691,6 +740,25 @@ var CPUInst = (function () {
 
 		if (address - 4 != p.end_address)
 			throw "offset";
+	}
+	
+	function inst_CLZ (p)
+	{
+		var val = p.Rm.value;
+		if (val == 0)
+		{
+			p.Rd.value = 32;
+		}
+		else
+		{
+			var i = 0;
+			while (!(val & 0x80000000))
+			{
+				val <<= 1;
+				i++;
+			}
+			p.Rd.value = i;
+		}
 	}
 	
 	function inst_MUL_MLA (p)
@@ -926,11 +994,16 @@ var CPUInst = (function () {
 		this.pc.value += (p.signed_immed_24 << 8) >> 6;
 	}
 	
-	var table = [
+	function inst_PLD (p)
+	{
+		// implement later...
+	}
+	
+	var regularTable = [
 		[
-			inst_BX,
-			makeInstructionPredecoder ({Rm: [3, 0]}),
-			[0x012fff10, 0x0ffffff0],
+			inst_BX_BLX,
+			makeInstructionPredecoder ({L: 5, Rm: [3, 0]}),
+			[0x012fff10, 0x0fffffd0],
 		],
 		[
 			inst_MRC,
@@ -955,12 +1028,12 @@ var CPUInst = (function () {
 		[
 			inst_LDRH,
 			decodeAddrMode3,
-			opcodesAddrMode3 (true),
+			opcodesAddrMode3 (true, false, true),
 		],
 		[
 			inst_STRH,
 			decodeAddrMode3,
-			opcodesAddrMode3 (false),
+			opcodesAddrMode3 (false, false, true),
 		],
 		[
 			inst_LDRB,
@@ -973,6 +1046,21 @@ var CPUInst = (function () {
 			opcodesAddrMode2 (true, false),
 		],
 		[
+			inst_LDRSH,
+			decodeAddrMode3,
+			opcodesAddrMode3 (true, true, true),
+		],
+		[
+			inst_LDRD,
+			decodeAddrMode3,
+			opcodesAddrMode3 (false /* ARM is weird */, true, false),
+		],
+		[
+			inst_STRD,
+			decodeAddrMode3,
+			opcodesAddrMode3 (false, true, true),
+		],
+		[
 			inst_LDM,
 			decodeAddrMode4,
 			opcodesAddrMode4 (true),
@@ -981,6 +1069,11 @@ var CPUInst = (function () {
 			inst_STM,
 			decodeAddrMode4,
 			opcodesAddrMode4 (false),
+		],
+		[
+			inst_CLZ,
+			makeInstructionPredecoder ({Rd: [15, 12], Rm: [3, 0]}),
+			[0x016f0f10, 0x0fff0ff0],
 		],
 		[
 			inst_MUL_MLA,
@@ -1108,11 +1201,21 @@ var CPUInst = (function () {
 			[0x0a000000, 0x0e000000],
 		]
 	];
+	
+	var unconditionalTable = [
+		[
+			inst_PLD,
+			decodeAddrMode2,
+			[0x0550f000, 0x0d70f000],
+		]
+	];
 
 	function decode (inst)
 	{
 		var item;
 		var match = false;
+		
+		var table = ((inst >>> 28) == 0x0F) ? unconditionalTable : regularTable;
 	
 		for (var i = 0, ii = table.length; i < ii; i++)
 		{
