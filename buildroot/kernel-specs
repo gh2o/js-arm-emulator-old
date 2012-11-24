@@ -8,5 +8,6 @@ optimize for size
 disable thumb
 enable DT board
 turn on EABI
-turn on LL debugging/printk
+turn on LL debugging
+turn on early printk
 
