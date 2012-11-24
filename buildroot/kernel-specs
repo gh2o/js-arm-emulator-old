@@ -2,7 +2,7 @@ start with versatile_defconfig
 replace all =m with =n
 no kernel modules
 cross prefix
-kernel command line: mem=64M@0x0xc0000000 earlyprintk debug
+kernel command line: mem=64M@0xc0000000 mem=64M@0x0d000000 earlyprintk debug
 turn on DT
 optimize for size
 disable thumb
