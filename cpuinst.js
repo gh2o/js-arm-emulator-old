@@ -203,7 +203,7 @@ var CPUInst = (function () {
 					var ss = s & 0x1F;
 					if (s === null)
 					{
-						var C = Number (cpsr.getC ());
+						var C = Number (this.cpsr.getC ());
 						shifter_operand = (C << 31) | (p.Rm.value >>> 1);
 						shifter_carry_out = !!(p.Rm.value & (1 << 0));
 					}
@@ -308,7 +308,7 @@ var CPUInst = (function () {
 		else
 		{
 			if (p.W)
-				throw "possibly bad place";
+				Util.warn ("FIXME", "implement {STR|LDR}[B]T instructions");
 			address = p.Rn.value;
 			p.Rn.value = (p.Rn.value + index) >>> 0;
 		}
@@ -457,8 +457,8 @@ var CPUInst = (function () {
 		cpsr.setV ((a31 != b31) && (a31 != r31));
 	};
 	
-	doALU.STAT_RSB = function (a, b, r, cpsr, b) {
-		return doALU.STAT_SUB (b, a, r, cpsr, b);
+	doALU.STAT_RSB = function (a, b, r, cpsr, p) {
+		return doALU.STAT_SUB (b, a, r, cpsr, p);
 	};
 	
 	function doALU (p, func, stat, write)
@@ -779,12 +779,31 @@ var CPUInst = (function () {
 		}
 	}
 	
-	function inst_UMULL_UMLAL (p)
+	function inst_SMULL_SMLAL_UMULL_UMLAL (p)
 	{
-		var ahi = p.Rm.value >>> 16;
-		var alo = p.Rm.value & 0xFFFF;
-		var bhi = p.Rs.value >>> 16;
-		var blo = p.Rs.value & 0xFFFF;
+		var pp = p.Rm.value;
+		var qq = p.Rs.value;
+	
+		// flip later
+		var neg = false;
+		if (p.signed)
+		{
+			if (pp & (1 << 31))
+			{
+				neg = !neg;
+				pp = (-pp) >>> 0;
+			}
+			if (qq & (1 << 31))
+			{
+				neg = !neg;
+				qq = (-qq) >>> 0;
+			}
+		}
+	
+		var ahi = pp >>> 16;
+		var alo = pp & 0xFFFF;
+		var bhi = qq >>> 16;
+		var blo = qq & 0xFFFF;
 		
 		var hi = ahi * bhi;
 		var lo = alo * blo;
@@ -800,6 +819,12 @@ var CPUInst = (function () {
 		{
 			hi += 1;
 			lo >>>= 0;
+		}
+		
+		// flip now
+		if (neg)
+		{
+			throw "flip now";
 		}
 		
 		if (p.A)
@@ -827,6 +852,11 @@ var CPUInst = (function () {
 			this.cpsr.setN (!!(hi & (1 << 31)));
 			this.cpsr.setZ (hi == 0 && lo == 0);
 		}
+	}
+	
+	function inst_SMULL_SMLAL (p)
+	{
+		throw "SMULL";
 	}
 	
 	function inst_SWP (p)
@@ -1084,13 +1114,13 @@ var CPUInst = (function () {
 			[0x00000090, 0x0fc00090],
 		],
 		[
-			inst_UMULL_UMLAL,
+			inst_SMULL_SMLAL_UMULL_UMLAL,
 			makeInstructionPredecoder ({
-				A: 21, S: 20,
+				signed: 22, A: 21, S: 20,
 				RdHi: [19, 16], RdLo: [15, 12],
 				Rs: [11, 8], Rm: [3, 0],
 			}),
-			[0x00800090, 0x0fc000f0]
+			[0x00800090, 0x0f8000f0]
 		],
 		[
 			inst_SWP,

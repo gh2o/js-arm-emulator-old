@@ -2,7 +2,7 @@ var Util = (function () {
 
 	var DEBUG = [10, "log"];
 	var INFO = [20, "info"];
-	var WARN = [30, "warning"];
+	var WARN = [30, "warn"];
 	var ERROR = [40, "error"];
 	
 	var loglevel = 15;

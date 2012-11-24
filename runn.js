@@ -11,10 +11,6 @@ var kernel = new ELF.Loader (new DataView (FS.readFileSync ("./buildroot/vmlinux
 kernel.loadInto (pmem);
 cpu.setPC (kernel.header.e_entry);
 
-//var fdt_loc = 0x10000000;
-//pmem.putData (fdt_loc, new DataView (FS.readFileSync ("./board.dtb")));
-//cpu.getReg (2).value = fdt_loc;
-
 // setup ATAGs
 /*
 var atag_start = 0x04000000;
@@ -37,8 +33,11 @@ pmem.putU32 (ata += 4, 0);
 pmem.putU32 (ata += 4, 0); // ATAG_NONE
 */
 
-cpu.getReg (1).value = 0x00000183;
-cpu.getReg (2).value = 0xd0000000;
+cpu.getReg (1).value = 0; 0x00000183;
+
+var fdtloc = 0xc3000000;
+pmem.putData (fdtloc, new DataView (FS.readFileSync ("./board.dtb")));
+cpu.getReg (2).value = fdtloc;
 
 var i = 0;
 while (true)
@@ -81,7 +80,14 @@ while (true)
 		console.log ("end bank");
 	}
 	*/
-
+	/*
+	if (cpu.pc.raw >= 0xc02d021c && cpu.pc.raw < 0xc02d0304)
+	{
+		console.log (cpu.getRegs ());
+		console.log (Util.hex32 (cpu.pc.raw));
+	}
+	*/
+	
 	var oldpc = cpu.pc.raw;
 	cpu.tick ();
 	var pc = cpu.pc.raw;

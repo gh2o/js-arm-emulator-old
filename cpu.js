@@ -231,7 +231,9 @@ var CPU = (function () {
 			var item = CPUInst.decode (inst);
 			if (!item)
 			{
-				console.log ("BAD INSTRUCTION: " + Util.hex32 (inst) +
+				if (inst == 0xe7f001f2)
+					console.log ("[[[BUG]]]");
+				Util.error ("bad instruction", Util.hex32 (inst) +
 					" at " + Util.hex32 (this.curpc));
 				console.log (this.getRegs ());
 				throw "bad instruction";
